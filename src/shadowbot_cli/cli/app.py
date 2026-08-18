@@ -145,29 +145,24 @@ def login(
 
 
 @app.command()
-@json_command
 def skill(
     command: Annotated[
         Optional[list[str]],
         typer.Argument(help="命令路径，如 login 或 app run；不填显示用法。"),
     ] = None,
-) -> dict:
-    """查看命令的使用文档。"""
+) -> None:
+    """查看命令的使用文档（直接输出原始 Markdown/帮助文本，不套 JSON 信封）。"""
     if not command:
-        return {
-            "usage": "shadowbot-cli skill <命令路径>",
-            "example": "shadowbot-cli skill login",
-        }
+        print("用法：shadowbot-cli skill <命令路径>")
+        print("示例：shadowbot-cli skill login")
+        return
     target = resolve(build_root(app), command)
     if target is None:
         _fail_and_exit("usage_error", f"未知命令：{' '.join(command)}")
     content = read_doc(command)
     if content is None:
         content = command_help(target, command)
-        source = "help"
-    else:
-        source = "markdown"
-    return {"command": " ".join(command), "source": source, "content": content}
+    print(content, end="", flush=True)
 
 
 def run() -> None:

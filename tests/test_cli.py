@@ -98,27 +98,23 @@ def test_version():
 def test_skill_without_args_shows_usage():
     result = runner.invoke(app, ["skill"])
     assert result.exit_code == 0
-    data = _load_json(result)
-    assert data["success"] is True
-    assert "skill" in data["data"]["usage"]
+    assert "shadowbot-cli skill <命令路径>" in result.stdout
 
 
 def test_skill_reads_doc():
+    # 直接输出 Markdown 原始内容，不套 JSON 信封
     result = runner.invoke(app, ["skill", "login"])
     assert result.exit_code == 0
-    data = _load_json(result)
-    assert data["success"] is True
-    assert data["data"]["source"] == "markdown"
-    assert "shadowbot-cli login" in data["data"]["content"]
+    assert result.stdout.startswith("# shadowbot-cli login")
+    assert "shadowbot-cli login --access-key-id" in result.stdout
+    assert result.stderr == ""
 
 
 def test_skill_falls_back_to_builtin_help():
     # skill 命令本身没有 markdown，应回退到内置帮助
     result = runner.invoke(app, ["skill", "skill"])
     assert result.exit_code == 0
-    data = _load_json(result)
-    assert data["data"]["source"] == "help"
-    assert "查看命令的使用文档" in data["data"]["content"]
+    assert "查看命令的使用文档" in result.stdout
 
 
 def test_skill_unknown_command():
