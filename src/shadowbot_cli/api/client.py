@@ -209,7 +209,10 @@ class ApiClient:
     ) -> dict[str, Any]:
         """查询已发版应用，附带参数说明与使用说明（带本地缓存）。
 
-        流程：全量拉列表 → 过滤（appType=app 且已发版）→ 逐个补详情（命中缓存复用）。
+        默认只返回 appType=app、已发版、且带使用说明（instruction）的应用——
+        Agent 靠说明判断用途，没有说明的应用对 Agent 没有意义。无说明的应用
+        同样按 appId+version 缓存（命中即复用），只是不出现在结果里。
+        --include-all 关闭全部过滤，原样返回。
         """
         all_items = self._fetch_all_pages(app_name=app_name, owner_account=owner_account)
         cache = app_cache.load()
@@ -227,6 +230,8 @@ class ApiClient:
                 if entry is not None:
                     entry["cached_at"] = time.time()
                     cache[app_id] = entry
+            if not include_all and not (entry or {}).get("instruction"):
+                continue  # 无使用说明，Agent 无法判断用途，不出现在结果里（缓存已复用）
             result.append({
                 "appId": app_id,
                 "appName": item.get("appName"),

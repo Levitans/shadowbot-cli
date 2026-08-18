@@ -250,41 +250,61 @@ def _app_item(app_id, *, version="3", app_type="app", name="应用"):
 
 
 def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
+    def instruction_handler(json, params):
+        app_id = params.get("appId")
+        return {"success": True, "code": 200, "data": {"instruction": "" if app_id == "a4" else "<p>ins</p>"}}
+
+    def flow_handler(json, params):
+        app_id = params.get("appId")
+        return {"success": True, "code": 200, "data": {"flowParams": [{"name": "p"}] if app_id == "a1" else []}}
+
     client, http = _app_client(monkeypatch, tmp_path, {
         APP_LIST_PATH: _list_response([
             _app_item("a1", name="应用1"),
             _app_item("a2", name="未发版", version="未发版"),
             _app_item("a3", name="指令", app_type="activity"),
+            _app_item("a4", name="无说明", version="2"),
         ]),
-        APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": [{"name": "p"}]}},
-        APP_VERSION_PATH: {"success": True, "code": 200, "data": {"instruction": "<p>ins</p>"}},
+        APP_ONLINE_PATH: flow_handler,
+        APP_VERSION_PATH: instruction_handler,
     })
     result = client.list_apps()
+    assert [i["appId"] for i in result["list"]] == ["a1"]  # a4 无说明 → 过滤
     assert result["total"] == 1
     item = result["list"][0]
-    assert item["appId"] == "a1"
     assert item["appName"] == "应用1"
     assert item["ownerName"] == "果冻"
     assert item["ownerAccount"] == "guodong@fckjjs"
     assert item["instruction"] == "<p>ins</p>"
     assert item["flowParams"] == [{"name": "p"}]
+    # a2/a3 在拉详情前已被过滤；a1/a4 各拉 2 个详情接口 = 4 次
     detail_calls = [c for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)]
     assert {c["path"] for c in detail_calls} == {APP_ONLINE_PATH, APP_VERSION_PATH}
-    assert len(detail_calls) == 2
+    assert len(detail_calls) == 4
 
 
-def test_list_apps_cache_hit_skips_detail(monkeypatch, tmp_path):
+def test_list_apps_no_instruction_filtered_and_cached(monkeypatch, tmp_path):
     responses = {
         APP_LIST_PATH: _list_response([_app_item("a1")]),
         APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": []}},
         APP_VERSION_PATH: {"success": True, "code": 200, "data": {"instruction": ""}},
     }
     client, http = _app_client(monkeypatch, tmp_path, responses)
-    client.list_apps()
+    assert client.list_apps()["list"] == []  # 无 instruction → 不返回
     assert sum(1 for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)) == 2
     http.calls.clear()
-    client.list_apps()
+    assert client.list_apps()["list"] == []  # 仍不返回，且命中缓存不再拉详情
     assert sum(1 for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)) == 0
+
+
+def test_list_apps_include_all_keeps_no_instruction(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        APP_LIST_PATH: _list_response([_app_item("a1")]),
+        APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": []}},
+        APP_VERSION_PATH: {"success": True, "code": 200, "data": {"instruction": ""}},
+    })
+    result = client.list_apps(include_all=True)
+    assert [i["appId"] for i in result["list"]] == ["a1"]  # include_all 不过滤
 
 
 def test_list_apps_version_change_refetches(monkeypatch, tmp_path):
@@ -307,10 +327,8 @@ def test_list_apps_detail_failure_not_cached(monkeypatch, tmp_path):
         APP_VERSION_PATH: {"success": True, "code": 200, "data": {"instruction": "ins"}},
     })
     result = client.list_apps()
-    item = result["list"][0]
-    assert item["instruction"] == ""
-    assert item["flowParams"] == []
-    assert app_cache.load() == {}
+    assert result["list"] == []  # 详情失败 → 视为无说明，不返回
+    assert app_cache.load() == {}  # 且失败不写缓存
 
 
 def test_fetch_all_pages_loops(monkeypatch, tmp_path):
@@ -318,8 +336,12 @@ def test_fetch_all_pages_loops(monkeypatch, tmp_path):
         page = int(body["page"])
         return _list_response([_app_item(f"a{page}")], pages=2)
 
+    def instruction_handler(json, params):
+        return {"success": True, "code": 200, "data": {"instruction": "<p>ins</p>"}}
+
     client, http = _app_client(monkeypatch, tmp_path, {
         APP_LIST_PATH: list_handler,
+        APP_VERSION_PATH: instruction_handler,
     })
     result = client.list_apps()
     assert result["total"] == 2

@@ -16,7 +16,8 @@
 
 `--app-name` 与 `--owner-account` 只能二选一；两者都不给时返回全部已发版应用。
 
-默认只返回 `appType=app` 且已发版的应用；`--include-all` 关闭该过滤。
+默认只返回 `appType=app`、已发版、且带使用说明（`instruction` 非空）的应用；
+没有使用说明的应用 Agent 无法判断用途，不会返回。`--include-all` 关闭全部过滤（含未发版、指令类型、无使用说明）。
 
 ## 示例
 

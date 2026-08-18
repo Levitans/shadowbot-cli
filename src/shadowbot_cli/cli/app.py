@@ -162,7 +162,7 @@ def app_list(
         typer.Option("--include-all", help="不过滤，返回全部应用（含未发版与指令）。"),
     ] = False,
 ) -> dict:
-    """查询已发版应用，附带参数说明与使用说明。"""
+    """查询已发版且带使用说明的应用，附带参数说明与使用说明。"""
     if app_name and owner_account:
         _fail_and_exit("usage_error", "--app-name 与 --owner-account 只能二选一", exit_code=2)
     return build_api_client().list_apps(
