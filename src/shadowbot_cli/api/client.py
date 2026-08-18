@@ -14,12 +14,18 @@ from __future__ import annotations
 import time
 from typing import Any
 
-from .. import config
+from .. import app_cache, config
 from ..errors import ApiError, AuthError, HttpError
 from ..http.client import HttpClient
 from ..http.rate_limiter import RateLimiter
 from .models import Token
-from .rate_limits import TOKEN_PATH, rate_limit_for
+from .rate_limits import (
+    APP_LIST_PATH,
+    APP_ONLINE_DETAIL_PATH,
+    APP_VERSION_DETAIL_PATH,
+    TOKEN_PATH,
+    rate_limit_for,
+)
 
 API_BASE = "https://api.yingdao.com"
 # 令牌接口未返回 expires_in 时的兜底有效期（秒）
@@ -71,6 +77,142 @@ class ApiClient:
         if not token or time.time() > expires_at:
             raise AuthError("未登录或令牌已过期，请先运行 login 命令")
         return token
+
+    # --- 应用查询 ---
+    def _call(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, Any] | None = None,
+        json: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """统一鉴权 + 限流 + 业务错误判定的请求入口（应用查询接口共用）。
+
+        令牌来自 get_token（未登录抛 AuthError）；限流按路径从登记表取。
+        影刀成功时 success=true、code=200/0，否则抛 ApiError。
+        """
+        token = self.get_token()
+        headers = {"Authorization": f"Bearer {token}"}
+        try:
+            payload = self._http.request(
+                method, path, params=params, json=json,
+                headers=headers, rate_limit=rate_limit_for(path),
+            )
+        except HttpError as e:
+            raise ApiError(f"请求 {path} 失败：{e}") from e
+        if not isinstance(payload, dict):
+            raise ApiError(f"接口响应格式异常：{payload!r}")
+        code = _lookup(payload, "code")
+        if _lookup(payload, "success") is False or (code is not None and str(code) not in ("200", "0")):
+            raise ApiError(f"接口调用失败：{_lookup(payload, 'message', 'msg', 'error') or '未知错误'}")
+        return payload
+
+    def query_app_list(
+        self,
+        *,
+        page: int = 1,
+        size: int = 30,
+        app_name: str | None = None,
+        owner_account: str | None = None,
+    ) -> dict[str, Any]:
+        """查询应用列表（POST APP_LIST_PATH），返回 {"list": [...], "page": {...}}。"""
+        body: dict[str, str] = {"page": str(page), "size": str(size)}
+        if app_name:
+            body["appName"] = app_name
+        elif owner_account:
+            body["ownerUserSearchKey"] = owner_account
+        payload = self._call("POST", APP_LIST_PATH, json=body)
+        data = payload.get("data")
+        items = data if isinstance(data, list) else []
+        page_info = payload.get("page")
+        return {"list": items, "page": page_info if isinstance(page_info, dict) else {}}
+
+    def query_app_flow_params(self, app_id: str) -> list[dict[str, Any]]:
+        """查询线上版本参数（GET APP_ONLINE_DETAIL_PATH），返回 data.flowParams。"""
+        payload = self._call("GET", APP_ONLINE_DETAIL_PATH, params={"appId": app_id})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return []
+        params = data.get("flowParams")
+        return params if isinstance(params, list) else []
+
+    def query_app_instruction(self, app_id: str) -> str:
+        """查询应用说明（GET APP_VERSION_DETAIL_PATH），返回 data.instruction。"""
+        payload = self._call("GET", APP_VERSION_DETAIL_PATH, params={"appId": app_id})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return ""
+        return data.get("instruction") or ""
+
+    def _fetch_all_pages(
+        self, *, app_name: str | None, owner_account: str | None
+    ) -> list[dict[str, Any]]:
+        """循环拉取列表全部分页并累加返回。"""
+        items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            res = self.query_app_list(page=page, size=30, app_name=app_name, owner_account=owner_account)
+            items.extend(res["list"])
+            try:
+                pages = int(res["page"].get("pages", 1) or 1)
+            except (TypeError, ValueError):
+                pages = 1
+            if page >= pages:
+                break
+            page += 1
+        return items
+
+    def _fetch_detail(self, app_id: str, version: str) -> dict[str, Any] | None:
+        """拉取单个应用的 instruction + flowParams；任一失败返回 None（不写缓存）。"""
+        try:
+            return {
+                "version": version,
+                "instruction": self.query_app_instruction(app_id),
+                "flowParams": self.query_app_flow_params(app_id),
+            }
+        except AuthError:
+            raise
+        except ApiError:
+            return None
+
+    def list_apps(
+        self,
+        *,
+        app_name: str | None = None,
+        owner_account: str | None = None,
+        include_all: bool = False,
+    ) -> dict[str, Any]:
+        """查询已发版应用，附带参数说明与使用说明（带本地缓存）。
+
+        流程：全量拉列表 → 过滤（appType=app 且已发版）→ 逐个补详情（命中缓存复用）。
+        """
+        all_items = self._fetch_all_pages(app_name=app_name, owner_account=owner_account)
+        cache = app_cache.load()
+        result: list[dict[str, Any]] = []
+        for item in all_items:
+            if not include_all and (item.get("appType") != "app" or item.get("version") == "未发版"):
+                continue
+            app_id = item.get("appId")
+            version = str(item.get("version"))
+            entry = cache.get(app_id)
+            if entry and entry.get("version") == version:
+                entry["cached_at"] = time.time()
+            else:
+                entry = self._fetch_detail(app_id, version)
+                if entry is not None:
+                    entry["cached_at"] = time.time()
+                    cache[app_id] = entry
+            result.append({
+                "appId": app_id,
+                "appName": item.get("appName"),
+                "ownerName": item.get("ownerName"),
+                "ownerAccount": item.get("ownerAccount"),
+                "instruction": (entry or {}).get("instruction", ""),
+                "flowParams": (entry or {}).get("flowParams", []),
+            })
+        app_cache.save(cache)
+        return {"list": result, "total": len(result)}
 
 
 # --- 响应解析 ---

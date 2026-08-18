@@ -16,6 +16,9 @@ from ..http.rate_limiter import RateLimit
 
 # 常用接口路径
 TOKEN_PATH = "/oapi/token/v2/token/create"
+APP_LIST_PATH = "/oapi/app/open/query/list"
+APP_ONLINE_DETAIL_PATH = "/oapi/app/open/query/appOnlineDetailWithParam"
+APP_VERSION_DETAIL_PATH = "/oapi/app/open/query/appVersionDetail"
 
 # 文档登记的接口频率限制（次/秒）
 ENDPOINT_QPS: dict[str, float] = {
@@ -50,11 +53,11 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/app/open/market/batchSaveMarket": 5,
     "/oapi/app/open/market/deleteMarketApp": 5,
     "/oapi/app/open/translate/owner": 5,
-    "/oapi/app/open/query/list": 5,
+    APP_LIST_PATH: 5,
     "/oapi/app/open/query/use/record/list": 5,
     "/oapi/app/open/query/pageRunRecordData": 5,
-    "/oapi/app/open/query/appVersionDetail": 5,
-    "/oapi/app/open/query/appOnlineDetailWithParam": 5,
+    APP_VERSION_DETAIL_PATH: 5,
+    APP_ONLINE_DETAIL_PATH: 5,
     "/oapi/app/open/historyVersionList": 5,
     # --- 机器人 ---
     "/oapi/robot/v2/query": 5,

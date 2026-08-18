@@ -6,7 +6,7 @@ from typer.testing import CliRunner
 
 from shadowbot_cli.api.models import Token
 from shadowbot_cli.cli.app import app
-from shadowbot_cli.errors import ApiError
+from shadowbot_cli.errors import ApiError, AuthError
 
 runner = CliRunner()
 
@@ -14,10 +14,11 @@ runner = CliRunner()
 class _FakeApi:
     """替身：记录传给 api 层的参数，返回预置结果或抛错。"""
 
-    def __init__(self, token=None, error=None, seen=None):
+    def __init__(self, token=None, error=None, seen=None, list_result=None):
         self._token = token
         self._error = error
         self.seen = seen if seen is not None else {}
+        self._list_result = list_result
 
     def login(self, access_key_id, access_key_secret):
         self.seen["id"] = access_key_id
@@ -26,9 +27,15 @@ class _FakeApi:
             raise self._error
         return self._token
 
+    def list_apps(self, *, app_name=None, owner_account=None, include_all=False):
+        self.seen["list"] = {"app_name": app_name, "owner_account": owner_account, "include_all": include_all}
+        if self._error is not None:
+            raise self._error
+        return self._list_result if self._list_result is not None else {"list": [], "total": 0}
 
-def _fake_api(monkeypatch, *, token=None, error=None) -> _FakeApi:
-    fake = _FakeApi(token=token, error=error)
+
+def _fake_api(monkeypatch, *, token=None, error=None, list_result=None) -> _FakeApi:
+    fake = _FakeApi(token=token, error=error, list_result=list_result)
     monkeypatch.setattr("shadowbot_cli.cli.app.build_api_client", lambda: fake)
     return fake
 
@@ -132,3 +139,41 @@ def test_skill_rejects_path_traversal():
     data = _load_json(result)
     assert data["success"] is False
     assert data["error"]["code"] == "usage_error"
+
+
+# --- app list ---
+def test_app_list_success(monkeypatch):
+    _fake_api(monkeypatch, list_result={"list": [{"appId": "a1", "appName": "测试"}], "total": 1})
+    result = runner.invoke(app, ["app", "list", "--app-name", "测试"])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"]["total"] == 1
+    assert data["data"]["list"][0]["appName"] == "测试"
+    assert result.stderr == ""
+
+
+def test_app_list_passes_filters(monkeypatch):
+    fake = _fake_api(monkeypatch, list_result={"list": [], "total": 0})
+    result = runner.invoke(app, ["app", "list", "--owner-account", "guodong@fckjjs", "--include-all"])
+    assert result.exit_code == 0
+    assert fake.seen["list"] == {"app_name": None, "owner_account": "guodong@fckjjs", "include_all": True}
+
+
+def test_app_list_conflicting_filters(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, ["app", "list", "--app-name", "x", "--owner-account", "y"])
+    assert result.exit_code == 2
+    data = _load_json(result)
+    assert data["success"] is False
+    assert data["error"]["code"] == "usage_error"
+    assert result.stderr == ""
+
+
+def test_app_list_auth_error(monkeypatch):
+    _fake_api(monkeypatch, error=AuthError("未登录或令牌已过期，请先运行 login 命令"))
+    result = runner.invoke(app, ["app", "list", "--app-name", "x"])
+    assert result.exit_code == 1
+    data = _load_json(result)
+    assert data["error"]["code"] == "auth_error"
+    assert result.stderr == ""

@@ -141,6 +141,35 @@ def login(
     return {"saved_to": str(config.config_file()), "expires_in": token.expires_in}
 
 
+# --- 应用管理 ---
+app_group = typer.Typer(help="RPA 应用管理相关命令。", no_args_is_help=True)
+app.add_typer(app_group, name="app")
+
+
+@app_group.command("list")
+@json_command
+def app_list(
+    app_name: Annotated[
+        Optional[str],
+        typer.Option("--app-name", help="按应用名关键词查询。"),
+    ] = None,
+    owner_account: Annotated[
+        Optional[str],
+        typer.Option("--owner-account", help="按负责人账号查询（对应接口 ownerUserSearchKey）。"),
+    ] = None,
+    include_all: Annotated[
+        bool,
+        typer.Option("--include-all", help="不过滤，返回全部应用（含未发版与指令）。"),
+    ] = False,
+) -> dict:
+    """查询已发版应用，附带参数说明与使用说明。"""
+    if app_name and owner_account:
+        _fail_and_exit("usage_error", "--app-name 与 --owner-account 只能二选一", exit_code=2)
+    return build_api_client().list_apps(
+        app_name=app_name, owner_account=owner_account, include_all=include_all
+    )
+
+
 @app.command()
 def skill(
     command: Annotated[
