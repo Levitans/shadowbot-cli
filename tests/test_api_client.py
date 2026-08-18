@@ -107,6 +107,52 @@ def test_get_token_returns_valid(monkeypatch, tmp_path):
     assert ApiClient(http=_FakeHttp()).get_token() == "tok"
 
 
+
+def test_get_token_auto_refreshes_expired(monkeypatch, tmp_path):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config.save(
+        {
+            "access_key_id": "k1",
+            "access_key_secret": "s1",
+            "access_token": "old",
+            "expires_at": 0,  # 已过期
+        }
+    )
+    http = _FakeHttp(payload={"access_token": "new", "expires_in": 7200})
+    assert ApiClient(http=http).get_token() == "new"
+    # 用保存的 key/secret 换取新令牌，并写回新令牌与有效期
+    assert http.calls[0]["params"] == {"accessKeyId": "k1", "accessKeySecret": "s1"}
+    data = config.load()
+    assert data["access_token"] == "new"
+    assert data["access_key_id"] == "k1"
+    assert data["access_key_secret"] == "s1"
+    assert data["expires_at"] > 0
+
+
+def test_get_token_auto_refreshes_missing_token(monkeypatch, tmp_path):
+    # 令牌缺失但凭据在：也应自动续期，而不是要求重新 login
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config.save({"access_key_id": "k1", "access_key_secret": "s1"})
+    http = _FakeHttp(payload={"access_token": "new", "expires_in": 7200})
+    assert ApiClient(http=http).get_token() == "new"
+
+
+def test_get_token_refresh_failure_raises_auth_error(monkeypatch, tmp_path):
+    # 凭据失效：自动续期失败时抛 AuthError（而非静默或 api_error）
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    config.save(
+        {
+            "access_key_id": "bad",
+            "access_key_secret": "bad",
+            "access_token": "old",
+            "expires_at": 0,
+        }
+    )
+    http = _FakeHttp(payload={"code": 400, "message": "bad key"})
+    with pytest.raises(AuthError, match="Access Key 可能已失效"):
+        ApiClient(http=http).get_token()
+
+
 # --- 应用查询 ---
 APP_LIST_PATH = "/oapi/app/open/query/list"
 APP_ONLINE_PATH = "/oapi/app/open/query/appOnlineDetailWithParam"
@@ -280,3 +326,4 @@ def test_fetch_all_pages_loops(monkeypatch, tmp_path):
     assert [i["appId"] for i in result["list"]] == ["a1", "a2"]
     list_calls = [c for c in http.calls if c["path"] == APP_LIST_PATH]
     assert len(list_calls) == 2
+
