@@ -172,15 +172,12 @@ class ApiClient:
     def _fetch_all_pages(
         self, *, app_name: str | None, owner_account: str | None
     ) -> list[dict[str, Any]]:
-        """循环拉取列表全部分页并累加返回（带列表缓存，避免重复翻页）。
+        """循环拉取列表全部分页并累加返回。
 
-        size 取 100（接口实测支持），减少页数；列表按查询键缓存，
-        命中时直接返回，不请求列表接口。
+        列表不缓存：version 是判断详情缓存是否过期的信号，必须每次拿最新值，
+        否则应用升级后列表仍返回旧版本，详情缓存无法感知。
+        size 取 100（实测接口支持）减少页数。
         """
-        query_key = f"{app_name or ''}|{owner_account or ''}"
-        cached = app_cache.load_list(query_key)
-        if cached is not None:
-            return cached
         items: list[dict[str, Any]] = []
         page = 1
         while True:
@@ -193,7 +190,6 @@ class ApiClient:
             if page >= pages:
                 break
             page += 1
-        app_cache.save_list(query_key, items)
         return items
 
     def _fetch_detail(self, app_id: str, version: str) -> dict[str, Any] | None:
