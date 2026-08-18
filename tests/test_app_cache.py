@@ -1,5 +1,6 @@
 """app_cache：读写往返、TTL 过期、损坏兜底。"""
 
+import json
 import time
 
 from shadowbot_cli import app_cache
@@ -47,3 +48,34 @@ def test_corrupt_file_returns_empty(tmp_path, monkeypatch):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not valid json", encoding="utf-8")
     assert app_cache.load() == {}
+
+
+# --- 列表缓存 ---
+def test_list_cache_roundtrip(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    items = [{"appId": "a1", "version": "3"}]
+    app_cache.save_list("q", items)
+    assert app_cache.load_list("q") == items
+
+
+def test_list_cache_missing_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    assert app_cache.load_list("nope") is None
+
+
+def test_list_cache_expired_returns_none(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    app_cache.save_list("q", [{"appId": "a1"}])
+    path = app_cache._list_path()
+    data = json.loads(path.read_text(encoding="utf-8"))
+    data["q"]["cached_at"] = time.time() - app_cache.LIST_CACHE_TTL - 10
+    path.write_text(json.dumps(data), encoding="utf-8")
+    assert app_cache.load_list("q") is None
+
+
+def test_list_cache_distinct_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+    app_cache.save_list("q1", [{"appId": "a1"}])
+    app_cache.save_list("q2", [{"appId": "a2"}])
+    assert app_cache.load_list("q1") == [{"appId": "a1"}]
+    assert app_cache.load_list("q2") == [{"appId": "a2"}]

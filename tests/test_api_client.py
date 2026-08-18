@@ -315,9 +315,28 @@ def test_list_apps_version_change_refetches(monkeypatch, tmp_path):
     })
     client.list_apps()
     http.responses[APP_LIST_PATH] = _list_response([_app_item("a1", version="4")])
+    app_cache._list_path().unlink()  # 模拟列表缓存过期：重新拉列表，才能看到版本变化
     http.calls.clear()
     client.list_apps()
     assert sum(1 for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)) == 2
+
+
+def test_list_apps_list_cached(monkeypatch, tmp_path):
+    def instruction_handler(json, params):
+        return {"success": True, "code": 200, "data": {"instruction": "<p>ins</p>"}}
+
+    client, http = _app_client(monkeypatch, tmp_path, {
+        APP_LIST_PATH: _list_response([_app_item("a1")]),
+        APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": []}},
+        APP_VERSION_PATH: instruction_handler,
+    })
+    client.list_apps()
+    first = sum(1 for c in http.calls if c["path"] == APP_LIST_PATH)
+    http.calls.clear()
+    client.list_apps()
+    second = sum(1 for c in http.calls if c["path"] == APP_LIST_PATH)
+    assert first > 0
+    assert second == 0  # 列表命中缓存，不再翻页拉列表接口
 
 
 def test_list_apps_detail_failure_not_cached(monkeypatch, tmp_path):

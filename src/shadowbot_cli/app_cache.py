@@ -20,10 +20,17 @@ from . import config
 
 # 孤儿条目回收阈值（秒）：应用超过该时长未在列表里被确认，视为已下线，丢弃缓存。
 CACHE_TTL = 30 * 24 * 3600
+# 列表缓存 TTL（秒）：短 TTL，权衡新鲜度与速度。
+# 详情缓存用 version 保证内容新鲜，列表缓存没有这种版本信号，只能靠短 TTL 兜底。
+LIST_CACHE_TTL = 60
 
 
 def _path() -> Path:
     return config.state_dir() / "app-cache.json"
+
+
+def _list_path() -> Path:
+    return config.state_dir() / "app-list-cache.json"
 
 
 def _read() -> dict:
@@ -49,9 +56,47 @@ def load() -> dict:
 
 
 def save(data: dict) -> None:
-    """原子写回缓存：先写临时文件，再 os.replace 覆盖。"""
-    path = _path()
+    """原子写回详情缓存。"""
+    _atomic_write(_path(), data)
+
+
+def _atomic_write(path: Path, data: dict) -> None:
+    """原子写 JSON：先写临时文件，再 os.replace 覆盖，避免并发/中断写坏。"""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
+
+
+# --- 列表缓存 ---
+# 存 query_key（app_name/owner_account）→ 原始列表项。原始项每次 app list
+# 都要用，加了缓存后重复查询不再翻页；TTL 短，牺牲一点新鲜度换速度。
+
+
+def _read_list() -> dict:
+    path = _list_path()
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def load_list(query_key: str) -> list[dict] | None:
+    """读取指定查询的列表缓存；无缓存或已过期返回 None。"""
+    entry = _read_list().get(query_key)
+    if not isinstance(entry, dict):
+        return None
+    if time.time() - entry.get("cached_at", 0) > LIST_CACHE_TTL:
+        return None
+    items = entry.get("items")
+    return items if isinstance(items, list) else None
+
+
+def save_list(query_key: str, items: list[dict]) -> None:
+    """写指定查询的列表缓存（原子）。"""
+    data = _read_list()
+    data[query_key] = {"items": items, "cached_at": time.time()}
+    _atomic_write(_list_path(), data)

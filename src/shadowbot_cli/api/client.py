@@ -172,11 +172,19 @@ class ApiClient:
     def _fetch_all_pages(
         self, *, app_name: str | None, owner_account: str | None
     ) -> list[dict[str, Any]]:
-        """循环拉取列表全部分页并累加返回。"""
+        """循环拉取列表全部分页并累加返回（带列表缓存，避免重复翻页）。
+
+        size 取 100（接口实测支持），减少页数；列表按查询键缓存，
+        命中时直接返回，不请求列表接口。
+        """
+        query_key = f"{app_name or ''}|{owner_account or ''}"
+        cached = app_cache.load_list(query_key)
+        if cached is not None:
+            return cached
         items: list[dict[str, Any]] = []
         page = 1
         while True:
-            res = self.query_app_list(page=page, size=30, app_name=app_name, owner_account=owner_account)
+            res = self.query_app_list(page=page, size=100, app_name=app_name, owner_account=owner_account)
             items.extend(res["list"])
             try:
                 pages = int(res["page"].get("pages", 1) or 1)
@@ -185,6 +193,7 @@ class ApiClient:
             if page >= pages:
                 break
             page += 1
+        app_cache.save_list(query_key, items)
         return items
 
     def _fetch_detail(self, app_id: str, version: str) -> dict[str, Any] | None:
