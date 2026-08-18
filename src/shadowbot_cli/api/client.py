@@ -64,13 +64,37 @@ class ApiClient:
         return token
 
     def get_token(self) -> str:
-        """读取有效令牌；未登录或过期抛 AuthError。后续接口鉴权时使用。"""
+        """读取有效令牌；过期时用已保存的 key/secret 自动换取新令牌。
+
+        login 后凭据与令牌都会持久化到 config：令牌过期无需重新 login，
+        直接用保存的 key/secret 静默续期；只有 key/secret 缺失或无效才抛 AuthError。
+        """
         cfg = config.load()
         token = cfg.get("access_token")
         expires_at = cfg.get("expires_at", 0)
-        if not token or time.time() > expires_at:
-            raise AuthError("未登录或令牌已过期，请先运行 login 命令")
-        return token
+        if token and time.time() <= expires_at:
+            return str(token)
+
+        key_id = cfg.get("access_key_id")
+        key_secret = cfg.get("access_key_secret")
+        if not key_id or not key_secret:
+            raise AuthError("未登录，请先运行 login 命令")
+
+        # 令牌缺失或过期：用保存的凭据换取新令牌
+        try:
+            refreshed = self.create_token(str(key_id), str(key_secret))
+        except ApiError as e:
+            raise AuthError(
+                f"无法自动获取令牌，Access Key 可能已失效，请重新运行 login 命令（{e}）"
+            ) from e
+        config.save(
+            {
+                **cfg,
+                "access_token": refreshed.access_token,
+                "expires_at": time.time() + refreshed.expires_in,
+            }
+        )
+        return refreshed.access_token
 
 
 # --- 响应解析 ---
