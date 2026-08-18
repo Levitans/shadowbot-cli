@@ -38,7 +38,7 @@ def _load_json(result) -> dict:
     return json.loads(result.stdout)
 
 
-# ---------------------------------------------------------------- login
+# --- login ---
 def test_login_success(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     _fake_api(monkeypatch, token=Token(access_token="tok", expires_in=7200))
@@ -84,7 +84,7 @@ def test_login_api_error(monkeypatch, tmp_path):
     assert result.stderr == ""
 
 
-# ---------------------------------------------------------------- version
+# --- version ---
 def test_version():
     result = runner.invoke(app, ["--version"])
     assert result.exit_code == 0
@@ -94,7 +94,7 @@ def test_version():
     assert data["data"]["version"] == "0.1.0"
 
 
-# ---------------------------------------------------------------- skill
+# --- skill ---
 def test_skill_without_args_shows_usage():
     result = runner.invoke(app, ["skill"])
     assert result.exit_code == 0

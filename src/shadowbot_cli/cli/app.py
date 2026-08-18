@@ -20,13 +20,11 @@ from ..errors import ShadowBotError
 from .output import emit_fail, emit_ok, error_code, set_pretty
 from .skills import build_root, command_help, read_doc, resolve
 
-# ------------------------------------------------------------------
-# 帮助选项文案中文化
+# --- 帮助选项文案中文化 ---
 # typer 0.27 起内嵌 Click（typer._click），"-h, --help  Show this message
 # and exit." 的文案写死在 typer._click.decorators.help_option 里。这里在
 # 启动时替换它，让所有命令（含子命令）的帮助选项都显示中文。
 # typer 内部结构变动时静默回退英文，不影响功能。
-# ------------------------------------------------------------------
 try:
     from typer._click import decorators as _click_decorators
 
@@ -77,12 +75,11 @@ def main(
         set_pretty(True)
 
 
-# ------------------------------------------------------------------
-# JSON 输出：契约在 cli/output.py 统一实现，这里只做命令层的胶水
+# --- JSON 输出契约 ---
+# 契约在 cli/output.py 统一实现，这里只做命令层的胶水
 # 成功：{"success": true,  "data": {...},  "error": null}
 # 失败：{"success": false, "data": null, "error": {"code": "...", "message": "..."}}
 # 退出码约定：0 成功 / 1 业务·API 错误 / 2 参数用法错误（Click 默认）
-# ------------------------------------------------------------------
 
 
 def _fail_and_exit(code: str, message: str, *, exit_code: int = 1) -> NoReturn:

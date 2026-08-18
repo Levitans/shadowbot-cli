@@ -16,7 +16,7 @@ from typing import Any
 
 from ..errors import ApiError, AuthError, HttpError
 
-# ------------------------------------------------------------------ UTF-8
+# --- UTF-8 ---
 # 强制 stdout/stderr 使用 UTF-8，避免 Windows 控制台中文乱码。
 # 部分环境（如某些测试桩）的流没有 reconfigure，需兜底。
 
@@ -33,7 +33,7 @@ def _ensure_utf8() -> None:
 
 _ensure_utf8()
 
-# ------------------------------------------------------------------ 输出
+# --- 输出 ---
 
 _pretty = False
 

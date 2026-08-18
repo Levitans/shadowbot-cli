@@ -19,7 +19,7 @@ TOKEN_PATH = "/oapi/token/v2/token/create"
 
 # 文档登记的接口频率限制（次/秒）
 ENDPOINT_QPS: dict[str, float] = {
-    # ---- 调度 / 任务 ----
+    # --- 调度 / 任务 ---
     "/oapi/dispatch/v2/job/query": 30,
     "/oapi/dispatch/v2/client/query": 20,
     "/oapi/dispatch/v2/task/list": 10,
@@ -40,7 +40,7 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/dispatch/v2/client/group/list": 5,
     "/oapi/dispatch/v2/file/upload": 5,
     "/oapi/dispatch/v2/task/newest/list": 5,
-    # ---- 应用市场 / 应用查询 ----
+    # --- 应用市场 / 应用查询 ---
     "/oapi/app/open/market/addMarketUser": 5,
     "/oapi/app/open/marketchangeMarketUser": 5,
     "/oapi/app/open/market/dealApproval": 5,
@@ -56,14 +56,14 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/app/open/query/appVersionDetail": 5,
     "/oapi/app/open/query/appOnlineDetailWithParam": 5,
     "/oapi/app/open/historyVersionList": 5,
-    # ---- 机器人 ----
+    # --- 机器人 ---
     "/oapi/robot/v2/query": 5,
     "/oapi/robot/v2/queryRobotParam": 3,
-    # ---- 资源标签 ----
+    # --- 资源标签 ---
     "/oapi/resource/tag/save": 5,
     "/oapi/resource/tag/delete": 5,
     "/oapi/resource/tag/listByIds": 5,
-    # ---- RPA 用户 ----
+    # --- RPA 用户 ---
     "/oapi/rpa/user/v1/list": 5,
     "/oapi/rpa/user/v1/create": 10,
     "/oapi/rpa/user/v1/modify": 5,
@@ -71,10 +71,10 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/rpa/user/v1/createExtraRpaEnterpriseUser": 5,
     "/oapi/rpa/user/v1/delayExtraRpaEnterpriseUser": 5,
     "/oapi/rpa/user/v2/create": 10,
-    # ---- 令牌 ----
+    # --- 令牌 ---
     TOKEN_PATH: 20,
     "/oapi/token/v2/signature/create": 5,
-    # ---- 日历 ----
+    # --- 日历 ---
     "/oapi/calendar/v1/save": 5,
     "/oapi/calendar/v1/delete": 5,
     "/oapi/calendar/v1/queryCalendarDetail": 5,

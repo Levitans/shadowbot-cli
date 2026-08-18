@@ -9,7 +9,7 @@ from shadowbot_cli.api.rate_limits import rate_limit_for
 from shadowbot_cli.errors import ApiError, AuthError, HttpError
 
 
-# ---------------------------------------------------------------- QPS 登记表
+# --- QPS 登记表 ---
 def test_rate_limit_for_known_path():
     limit = rate_limit_for("/oapi/token/v2/token/create")
     assert limit is not None
@@ -45,7 +45,7 @@ class _FakeHttp:
         return self.payload
 
 
-# ---------------------------------------------------------------- 响应解析
+# --- 响应解析 ---
 def test_parse_token_flat():
     assert _parse_token({"access_token": "tok", "expires_in": 7200}) == Token("tok", 7200)
 
@@ -64,7 +64,7 @@ def test_parse_token_no_token():
         _parse_token({"foo": "bar"})
 
 
-# ---------------------------------------------------------------- create_token
+# --- create_token ---
 def test_create_token_passes_params_and_rate_limit():
     http = _FakeHttp(payload={"access_token": "tok", "expires_in": 7200})
     client = ApiClient(http=http)
@@ -82,7 +82,7 @@ def test_create_token_wraps_http_error():
         client.create_token("k", "s")
 
 
-# ---------------------------------------------------------------- login
+# --- login ---
 def test_login_persists_credentials(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     http = _FakeHttp(payload={"access_token": "tok", "expires_in": 7200})
@@ -94,7 +94,7 @@ def test_login_persists_credentials(monkeypatch, tmp_path):
     assert data["access_token"] == "tok"
 
 
-# ---------------------------------------------------------------- get_token
+# --- get_token ---
 def test_get_token_without_login(monkeypatch, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     with pytest.raises(AuthError):

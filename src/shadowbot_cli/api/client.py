@@ -37,7 +37,7 @@ class ApiClient:
     def __init__(self, http: HttpClient):
         self._http = http
 
-    # ------------------------------------------------------------ 认证
+    # --- 认证 ---
     def create_token(self, access_key_id: str, access_key_secret: str) -> Token:
         """获取访问令牌（GET {TOKEN_PATH}）。"""
         try:
@@ -73,7 +73,7 @@ class ApiClient:
         return token
 
 
-# ------------------------------------------------------------ 响应解析
+# --- 响应解析 ---
 def _lookup(payload: dict[str, Any], *names: str) -> Any:
     """在响应（含可能的 data 包装层）里大小写不敏感地找键。"""
     layers: list[dict[str, Any]] = [payload]
