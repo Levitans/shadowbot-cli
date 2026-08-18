@@ -73,7 +73,7 @@ def _emit(payload: dict) -> None:
         # 人类在终端里：rich 美化输出
         from rich import print_json
 
-        print_json(payload)
+        print_json(data=payload)
         return
     indent = 2 if _pretty else None
     print(json.dumps(payload, ensure_ascii=False, indent=indent), flush=True)
