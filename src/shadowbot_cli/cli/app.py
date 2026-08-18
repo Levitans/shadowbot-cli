@@ -170,6 +170,25 @@ def app_list(
     )
 
 
+# --- 机器人管理 ---
+robot_group = typer.Typer(help="机器人管理相关命令（一个机器人即一台电脑）。", no_args_is_help=True)
+app.add_typer(robot_group, name="robot")
+
+
+@robot_group.command("list")
+@json_command
+def robot_list() -> dict:
+    """查询机器人列表。"""
+    return build_api_client().list_robots()
+
+
+@robot_group.command("groups")
+@json_command
+def robot_groups() -> dict:
+    """查询机器人组列表。"""
+    return build_api_client().list_robot_groups()
+
+
 @app.command()
 def skill(
     command: Annotated[

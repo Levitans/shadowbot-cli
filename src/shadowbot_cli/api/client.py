@@ -23,6 +23,8 @@ from .rate_limits import (
     APP_LIST_PATH,
     APP_ONLINE_DETAIL_PATH,
     APP_VERSION_DETAIL_PATH,
+    CLIENT_GROUP_LIST_PATH,
+    CLIENT_LIST_PATH,
     TOKEN_PATH,
     rate_limit_for,
 )
@@ -246,6 +248,50 @@ class ApiClient:
                 "flowParams": (entry or {}).get("flowParams", []),
             })
         app_cache.save(cache)
+        return {"list": result, "total": len(result)}
+
+    # --- 机器人管理 ---
+    def _fetch_all(self, path: str) -> list[dict[str, Any]]:
+        """循环拉取列表接口全部分页并累加返回（size 取 100 减少页数）。
+
+        分页终止条件同 _fetch_all_pages：读响应 page.pages。
+        """
+        items: list[dict[str, Any]] = []
+        page = 1
+        while True:
+            payload = self._call("POST", path, json={"page": page, "size": 100})
+            data = payload.get("data")
+            items.extend(data if isinstance(data, list) else [])
+            page_info = payload.get("page")
+            try:
+                pages = int((page_info if isinstance(page_info, dict) else {}).get("pages", 1) or 1)
+            except (TypeError, ValueError):
+                pages = 1
+            if page >= pages:
+                break
+            page += 1
+        return items
+
+    def list_robot_groups(self) -> dict[str, Any]:
+        """查询机器人组列表（POST CLIENT_GROUP_LIST_PATH），返回 {"list": [...], "total": N}。"""
+        items = self._fetch_all(CLIENT_GROUP_LIST_PATH)
+        return {"list": items, "total": len(items)}
+
+    def list_robots(self) -> dict[str, Any]:
+        """查询机器人列表（POST CLIENT_LIST_PATH），返回 {"list": [...], "total": N}。
+
+        每条只保留 robotClientUuid / robotClientName / status 三个字段，
+        接口返回的 IP、机器名、版本等对 Agent 判断用途没有帮助，一律裁掉。
+        """
+        items = self._fetch_all(CLIENT_LIST_PATH)
+        result = [
+            {
+                "robotClientUuid": r.get("robotClientUuid"),
+                "robotClientName": r.get("robotClientName"),
+                "status": r.get("status"),
+            }
+            for r in items
+        ]
         return {"list": result, "total": len(result)}
 
 

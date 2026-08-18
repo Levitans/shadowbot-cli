@@ -366,3 +366,82 @@ def test_fetch_all_pages_loops(monkeypatch, tmp_path):
     list_calls = [c for c in http.calls if c["path"] == APP_LIST_PATH]
     assert len(list_calls) == 2
 
+
+# --- 机器人管理 ---
+CLIENT_LIST_PATH = "/oapi/dispatch/v2/client/list"
+CLIENT_GROUP_LIST_PATH = "/oapi/dispatch/v2/client/group/list"
+
+
+def _group_item(uuid, name):
+    return {"robotClientGroupUuid": uuid, "robotClientGroupName": name}
+
+
+def _robot_item(uuid, name, status="offline"):
+    # 模拟接口真实返回：除三个保留字段外还带 IP、机器名等冗余字段
+    return {
+        "robotClientUuid": uuid,
+        "robotClientName": name,
+        "status": status,
+        "clientIp": "192.168.1.1",
+        "machineName": "LAPTOP-X",
+        "clientVersion": "6.0.30",
+        "robotClientGroupUuids": [],
+    }
+
+
+def test_list_robot_groups(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        CLIENT_GROUP_LIST_PATH: _list_response([_group_item("g1", "桉夏"), _group_item("g2", "测试")]),
+    })
+    result = client.list_robot_groups()
+    assert result["total"] == 2
+    assert result["list"][0] == {"robotClientGroupUuid": "g1", "robotClientGroupName": "桉夏"}
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == CLIENT_GROUP_LIST_PATH
+    assert call["json"] == {"page": 1, "size": 100}
+    assert call["headers"] == {"Authorization": "Bearer tok"}
+    assert call["rate_limit"] is not None
+
+
+def test_list_robot_groups_paginates(monkeypatch, tmp_path):
+    def handler(body, params):
+        return _list_response([_group_item(f"g{body['page']}", "组")], pages=2)
+
+    client, http = _app_client(monkeypatch, tmp_path, {CLIENT_GROUP_LIST_PATH: handler})
+    result = client.list_robot_groups()
+    assert [g["robotClientGroupUuid"] for g in result["list"]] == ["g1", "g2"]
+    assert sum(1 for c in http.calls if c["path"] == CLIENT_GROUP_LIST_PATH) == 2
+
+
+def test_list_robots_trims_fields(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        CLIENT_LIST_PATH: _list_response([_robot_item("r1", "桉夏@fckjjs", "online")]),
+    })
+    result = client.list_robots()
+    assert result["total"] == 1
+    # 只保留三个字段，IP/机器名/版本等一律裁掉
+    assert result["list"][0] == {
+        "robotClientUuid": "r1",
+        "robotClientName": "桉夏@fckjjs",
+        "status": "online",
+    }
+
+
+def test_list_robots_paginates(monkeypatch, tmp_path):
+    def handler(body, params):
+        return _list_response([_robot_item(f"r{body['page']}", "机器人")], pages=2)
+
+    client, http = _app_client(monkeypatch, tmp_path, {CLIENT_LIST_PATH: handler})
+    result = client.list_robots()
+    assert result["total"] == 2
+    assert [r["robotClientUuid"] for r in result["list"]] == ["r1", "r2"]
+    assert sum(1 for c in http.calls if c["path"] == CLIENT_LIST_PATH) == 2
+
+
+def test_list_robots_empty_data(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        CLIENT_LIST_PATH: {"success": True, "code": 200, "data": None, "page": {}},
+    })
+    assert client.list_robots() == {"list": [], "total": 0}
+
