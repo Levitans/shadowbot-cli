@@ -47,5 +47,3 @@
 | `flowParams` | 参数列表，每项含 name / direction / type / value / description / kind |
 
     {"success": true, "data": {"list": [{"appId": "...", "appName": "...", "ownerName": "...", "ownerAccount": "...", "instruction": "...", "flowParams": [...]}], "total": 11}, "error": null}
-
-未登录时退出码 1、`error.code=auth_error`；`--app-name` 与 `--owner-account` 同时给时退出码 2、`error.code=usage_error`。

@@ -6,11 +6,9 @@
 
     shadowbot-cli robot list
 
-无参数，返回全部机器人（自动拉取所有分页）。
+无参数
 
 ## 输出
-
-成功时 stdout 输出 JSON 信封，`data.list` 为机器人数组，`data.total` 为机器人数量。每个机器人含：
 
 | 字段 | 说明 |
 | --- | --- |
@@ -20,7 +18,6 @@
 
     {"success": true, "data": {"list": [{"robotClientUuid": "...", "robotClientName": "桉夏@fckjjs", "status": "offline"}], "total": 5}, "error": null}
 
-未登录时退出码 1、`error.code=auth_error`。
 
 ## 相关命令
 
