@@ -10,10 +10,23 @@ from __future__ import annotations
 import importlib.resources
 from pathlib import Path
 
-from typer import _click
 from typer.main import get_command
 
 SKILL_DIR_NAME = "skill"
+
+# typer 在不同版本里暴露 click 的方式不同：
+# - 0.27 起把 click 内嵌成私有模块 typer._click；
+# - 更老的版本里 typer 直接依赖外部 click 包（import click）；
+# - 某些分支版会彻底剥离 _click。
+# skill 的内置帮助回退只是 nice-to-have，缺 _click 时要保证模块本身能加载、
+# CLI 能启动，所以这里链式 import + 兜底占位，不让任何一种 typer 版本炸进程。
+try:
+    from typer import _click as _typer_click  # typer 0.27 起
+except ImportError:
+    try:
+        import click as _typer_click  # 旧版 typer
+    except ImportError:
+        _typer_click = None
 
 
 def _skill_dir() -> Path:
@@ -56,6 +69,19 @@ def read_doc(segments: list[str]) -> str | None:
 
 
 def command_help(command, segments: list[str]) -> str:
-    """生成命令的内置帮助文本（skill 的回退输出）。"""
-    ctx = _click.Context(command, info_name=" ".join(segments))
-    return command.get_help(ctx)
+    """生成命令的内置帮助文本（skill 的回退输出）。
+
+    优先用 typer._click.Context（typer 0.27 起的标准入口）；
+    缺 _click 时用 typer.testing.CliRunner 触发 --help 拿输出；
+    都不行时返回占位文案——help 拿不到不影响 CLI 主流程。
+    """
+    if _typer_click is not None:
+        ctx = _typer_click.Context(command, info_name=" ".join(segments))
+        return command.get_help(ctx)
+
+    try:
+        from typer.testing import CliRunner
+
+        return CliRunner().invoke(command, ["--help"]).output
+    except Exception:
+        return "（当前 typer 版本无法生成内置帮助，请参考 skill/<命令路径>.md 或 --help）\n"

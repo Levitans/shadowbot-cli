@@ -1,6 +1,6 @@
 [project]
 name = "shadowbot-cli"
-version = "0.1.0"
+version = "0.1.1"
 description = "影刀 RPA 开放平台的命令行工具"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -8,7 +8,7 @@ dependencies = [
     "httpx>=0.27",
     "python-dotenv>=1.0",
     "rich>=13.0.0",
-    "typer>=0.12",
+    "typer>=0.27,<0.28",  # 0.27 引入 typer._click 内嵌 click；后续版本 API 变动未验证
 ]
 
 [project.scripts]
