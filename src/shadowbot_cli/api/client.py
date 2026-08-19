@@ -11,7 +11,9 @@
 
 from __future__ import annotations
 
+import json
 import time
+from pathlib import Path
 from typing import Any
 
 from .. import app_cache, config
@@ -25,6 +27,8 @@ from .rate_limits import (
     APP_VERSION_DETAIL_PATH,
     CLIENT_GROUP_LIST_PATH,
     CLIENT_LIST_PATH,
+    FILE_UPLOAD_PATH,
+    JOB_START_PATH,
     TOKEN_PATH,
     rate_limit_for,
 )
@@ -112,6 +116,7 @@ class ApiClient:
         *,
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
+        files: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """统一鉴权 + 限流 + 业务错误判定的请求入口（应用查询接口共用）。
 
@@ -122,7 +127,7 @@ class ApiClient:
         headers = {"Authorization": f"Bearer {token}"}
         try:
             payload = self._http.request(
-                method, path, params=params, json=json,
+                method, path, params=params, json=json, files=files,
                 headers=headers, rate_limit=rate_limit_for(path),
             )
         except HttpError as e:
@@ -295,7 +300,97 @@ class ApiClient:
         return {"list": result, "total": len(result)}
 
 
+    # --- 应用运行 ---
+    def upload_file(self, file_path: str) -> str:
+        """上传文件（POST FILE_UPLOAD_PATH），返回 fileKey。"""
+        path = Path(file_path)
+        if not path.is_file():
+            raise ApiError(f"文件不存在：{file_path}")
+        payload = self._call(
+            "POST", FILE_UPLOAD_PATH, files={"file": (path.name, path.read_bytes())}
+        )
+        file_key = _lookup(payload, "fileKey")
+        if not file_key:
+            raise ApiError("文件上传响应缺少 fileKey")
+        return str(file_key)
+
+    def start_job(
+        self,
+        *,
+        app_id: str,
+        account_name: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """启动应用运行（POST JOB_START_PATH），返回接口 data。
+
+        params 为 {参数名: 值} 映射，按 flowParams 补类型组装。
+        file 类型参数的值必须是本地文件路径，自动上传并替换为 fileKey。
+        """
+        wire_params: list[Any] = self._build_wire_params(app_id, params) if params else []
+        payload = self._call(
+            "POST",
+            JOB_START_PATH,
+            json={"accountName": account_name, "robotUuid": app_id, "params": wire_params},
+        )
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {"data": data}
+
+    def _build_wire_params(self, app_id: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """把 {参数名: 值} 映射组装成接口要求的 [{name, type, value}] 数组。
+
+        file 类型参数必须给本地文件路径，自动上传拿 fileKey。
+        """
+        types = self._flow_param_types(app_id)
+        unknown = [name for name in params if name not in types]
+        if unknown:
+            raise ApiError(
+                f"应用没有入参「{'、'.join(unknown)}」（可选：{'、'.join(types) or '无'}）"
+            )
+        wire: list[dict[str, Any]] = []
+        for name, value in params.items():
+            ptype = types[name]
+            if ptype == "file":
+                if not isinstance(value, str) or not Path(value).is_file():
+                    raise ApiError(f"参数「{name}」是 file 类型，请传入本地文件路径")
+                value = self.upload_file(value)
+            wire.append({"name": name, "type": ptype, "value": _coerce_param_value(ptype, value)})
+        return wire
+
+    def _flow_param_types(self, app_id: str) -> dict[str, str]:
+        """入参名 → 类型映射。优先读 app list 的详情缓存，未命中再实时拉接口。
+
+        Agent 执行 app run 前必然已查过 app list，缓存即最新的参数说明。
+        缓存未命中时实时拉取的 flowParams 不写缓存：缓存以 version 为失效
+        信号，单独拉参数拿不到 version，写进去会破坏缓存的新鲜度语义。
+        """
+        entry = app_cache.load().get(app_id)
+        raw = entry.get("flowParams") if entry else None
+        if not isinstance(raw, list):
+            raw = self.query_app_flow_params(app_id)
+        types: dict[str, str] = {}
+        for item in raw:
+            if isinstance(item, dict) and item.get("direction") != "Out" and item.get("name"):
+                types[str(item["name"])] = str(item.get("type") or "str")
+        return types
+
+
 # --- 响应解析 ---
+def _coerce_param_value(param_type: str, value: Any) -> Any:
+    """按接口约定序列化参数值：bool 保留布尔本体，其余标量转字符串。
+
+    接口示例中 int/float 的 value 是字符串（"9191"/"1.01"），bool 是布尔。
+    """
+    if param_type == "bool":
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes")
+        return bool(value)
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=False)
+    return value if isinstance(value, str) else str(value)
+
+
 def _split_flow_params(params: list) -> dict[str, Any]:
     """把原始 flowParams（含 direction/kind）切成 {input, output}，去掉 direction 与 kind。
 

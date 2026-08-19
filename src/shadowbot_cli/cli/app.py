@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import functools
-from typing import Annotated, NoReturn, Optional
+import json
+import sys
+from typing import Annotated, Any, NoReturn, Optional
 
 import typer
 from dotenv import find_dotenv, load_dotenv
@@ -168,6 +170,38 @@ def app_list(
     return build_api_client().list_apps(
         app_name=app_name, owner_account=owner_account, include_all=include_all
     )
+
+
+@app_group.command("run")
+@json_command
+def app_run(
+    app_id: Annotated[
+        str,
+        typer.Option("--app-id", help="应用 ID（app list 返回的 appId）。"),
+    ],
+    account_name: Annotated[
+        str,
+        typer.Option("--account-name", help="机器人账号（robot list 返回的 robotClientName）。"),
+    ],
+    params: Annotated[
+        Optional[str],
+        typer.Option(
+            "--params",
+            help='运行参数 JSON 对象 {"参数名": 值}；参数类型自动补齐，file 参数给本地文件路径自动上传；"-" 从 stdin 读取。',
+        ),
+    ] = None,
+) -> dict:
+    """启动应用运行。"""
+    parsed: dict | None = None
+    if params is not None:
+        raw = sys.stdin.read() if params == "-" else params
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _fail_and_exit("usage_error", f"--params 不是有效 JSON：{e}", exit_code=2)
+        if not isinstance(parsed, dict):
+            _fail_and_exit("usage_error", "--params 必须是 JSON 对象 {参数名: 值}", exit_code=2)
+    return build_api_client().start_job(app_id=app_id, account_name=account_name, params=parsed)
 
 
 # --- 机器人管理 ---

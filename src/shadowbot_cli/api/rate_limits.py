@@ -21,6 +21,8 @@ APP_ONLINE_DETAIL_PATH = "/oapi/app/open/query/appOnlineDetailWithParam"
 APP_VERSION_DETAIL_PATH = "/oapi/app/open/query/appVersionDetail"
 CLIENT_LIST_PATH = "/oapi/dispatch/v2/client/list"
 CLIENT_GROUP_LIST_PATH = "/oapi/dispatch/v2/client/group/list"
+JOB_START_PATH = "/oapi/dispatch/v2/job/start"
+FILE_UPLOAD_PATH = "/oapi/dispatch/v2/file/upload"
 
 # 文档登记的接口频率限制（次/秒）
 ENDPOINT_QPS: dict[str, float] = {
@@ -33,7 +35,7 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/dispatch/v2/job/stop": 10,
     "/oapi/dispatch/v2/task/query": 10,
     "/oapi/dispatch/v2/job/list": 10,
-    "/oapi/dispatch/v2/job/start": 10,
+    JOB_START_PATH: 10,
     CLIENT_LIST_PATH: 10,
     "/oapi/dispatch/v2/task/start": 10,
     "/oapi/dispatch/v2/schedule/detail": 10,
@@ -43,7 +45,7 @@ ENDPOINT_QPS: dict[str, float] = {
     "/oapi/dispatch/v2/job/log/notify": 5,
     "/oapi/dispatch/v2/job/log/query": 5,
     CLIENT_GROUP_LIST_PATH: 5,
-    "/oapi/dispatch/v2/file/upload": 5,
+    FILE_UPLOAD_PATH: 5,
     "/oapi/dispatch/v2/task/newest/list": 5,
     # --- 应用市场 / 应用查询 ---
     "/oapi/app/open/market/addMarketUser": 5,

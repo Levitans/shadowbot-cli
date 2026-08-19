@@ -1,9 +1,11 @@
 """api 层：令牌响应解析、login 持久化、get_token 鉴权。"""
 
+import time
+
 import pytest
 
 from shadowbot_cli import app_cache, config
-from shadowbot_cli.api.client import ApiClient, _parse_token, _split_flow_params
+from shadowbot_cli.api.client import ApiClient, _coerce_param_value, _parse_token, _split_flow_params
 from shadowbot_cli.api.models import Token
 from shadowbot_cli.api.rate_limits import rate_limit_for
 from shadowbot_cli.errors import ApiError, AuthError, HttpError
@@ -170,6 +172,7 @@ class _FakeAppHttp:
         self.calls.append({
             "method": method, "path": path, "params": params,
             "json": json, "headers": headers, "rate_limit": rate_limit,
+            "files": kwargs.get("files"),
         })
         resp = self.responses.get(path)
         if callable(resp):
@@ -473,3 +476,151 @@ def test_list_robots_empty_data(monkeypatch, tmp_path):
     })
     assert client.list_robots() == {"list": [], "total": 0}
 
+
+
+# --- 应用运行 ---
+JOB_START_PATH = "/oapi/dispatch/v2/job/start"
+FILE_UPLOAD_PATH = "/oapi/dispatch/v2/file/upload"
+
+FLOW_PARAMS = [
+    {"name": "入参1", "type": "str", "direction": "In"},
+    {"name": "入参2", "type": "int", "direction": "In"},
+    {"name": "入参3", "type": "bool", "direction": "In"},
+    {"name": "入参5", "type": "file", "direction": "In"},
+    {"name": "出参1", "type": "str", "direction": "Out"},
+]
+
+
+def _cache_app(app_id="a1"):
+    app_cache.save({
+        app_id: {"version": "1.0", "cached_at": time.time(), "flowParams": FLOW_PARAMS},
+    })
+
+
+def test_upload_file_success(monkeypatch, tmp_path):
+    f = tmp_path / "数据.xlsx"
+    f.write_bytes(b"xlsx-bytes")
+    client, http = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {"fileKey": "fk-1"}},
+    })
+    assert client.upload_file(str(f)) == "fk-1"
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == FILE_UPLOAD_PATH
+    assert call["files"] == {"file": ("数据.xlsx", b"xlsx-bytes")}
+    assert call["headers"] == {"Authorization": "Bearer tok"}
+
+
+def test_upload_file_missing(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    with pytest.raises(ApiError, match="文件不存在"):
+        client.upload_file(str(tmp_path / "nope.xlsx"))
+
+
+def test_upload_file_no_filekey(monkeypatch, tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x")
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {}},
+    })
+    with pytest.raises(ApiError, match="fileKey"):
+        client.upload_file(str(f))
+
+
+def test_start_job_uses_cached_flow_params(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    _cache_app()
+    result = client.start_job(
+        app_id="a1", account_name="guodong@fckjjs",
+        params={"入参1": "abc", "入参2": 9191, "入参3": True},
+    )
+    assert result == {"jobUuid": "j1"}
+    call = http.calls[0]
+    assert call["path"] == JOB_START_PATH
+    assert call["json"] == {
+        "accountName": "guodong@fckjjs",
+        "robotUuid": "a1",
+        "params": [
+            {"name": "入参1", "type": "str", "value": "abc"},
+            {"name": "入参2", "type": "int", "value": "9191"},  # int → 字符串
+            {"name": "入参3", "type": "bool", "value": True},   # bool 保留布尔
+        ],
+    }
+    # 缓存命中：不实时拉 flowParams
+    assert all(c["path"] != APP_ONLINE_PATH for c in http.calls)
+
+
+def test_start_job_cache_miss_fetches_live(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": FLOW_PARAMS}},
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    client.start_job(app_id="a1", account_name="robot", params={"入参1": "abc"})
+    assert [c["path"] for c in http.calls] == [APP_ONLINE_PATH, JOB_START_PATH]
+    assert http.calls[1]["json"]["params"] == [{"name": "入参1", "type": "str", "value": "abc"}]
+
+
+def test_start_job_without_params(monkeypatch, tmp_path):
+    # 不传参数：空 dict → 空数组，不查 flowParams 接口
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    client.start_job(app_id="a1", account_name="robot")
+    assert http.calls[0]["json"]["params"] == []
+    assert all(c["path"] != APP_ONLINE_PATH for c in http.calls)
+
+
+def test_start_job_unknown_param(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="没有入参「不存在」"):
+        client.start_job(app_id="a1", account_name="robot", params={"不存在": 1})
+
+
+def test_start_job_rejects_output_param(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="出参1"):
+        client.start_job(app_id="a1", account_name="robot", params={"出参1": "x"})
+
+
+def test_start_job_file_param_uploads_local_path(monkeypatch, tmp_path):
+    f = tmp_path / "数据.xlsx"
+    f.write_bytes(b"xlsx")
+    client, http = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {"fileKey": "fk-9"}},
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    _cache_app()
+    client.start_job(app_id="a1", account_name="robot", params={"入参5": str(f)})
+    assert [c["path"] for c in http.calls] == [FILE_UPLOAD_PATH, JOB_START_PATH]
+    assert http.calls[1]["json"]["params"] == [{"name": "入参5", "type": "file", "value": "fk-9"}]
+
+
+def test_start_job_file_param_missing_path_raises(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="file 类型，请传入本地文件路径"):
+        client.start_job(app_id="a1", account_name="robot", params={"入参5": "/no/such/file.xlsx"})
+
+
+# --- 参数值序列化 ---
+def test_coerce_param_value_bool():
+    assert _coerce_param_value("bool", True) is True
+    assert _coerce_param_value("bool", "true") is True
+    assert _coerce_param_value("bool", "false") is False
+    assert _coerce_param_value("bool", 0) is False
+
+
+def test_coerce_param_value_scalars_to_str():
+    assert _coerce_param_value("int", 9191) == "9191"
+    assert _coerce_param_value("float", 1.01) == "1.01"
+    assert _coerce_param_value("str", "abc") == "abc"
+    assert _coerce_param_value("str", None) == ""
+
+
+def test_coerce_param_value_structured_to_json():
+    assert _coerce_param_value("str", {"a": 1}) == '{"a": 1}'
+    assert _coerce_param_value("str", [1, 2]) == "[1, 2]"
