@@ -49,6 +49,24 @@ class _FakeApi:
             raise self._error
         return {"jobUuid": "job-1"}
 
+    def get_job(self, job_uuid):
+        self.seen["get_job"] = {"job_uuid": job_uuid}
+        if self._error is not None:
+            raise self._error
+        return {"jobUuid": job_uuid, "status": "finish", "inputs": [], "outputs": []}
+
+    def list_jobs(self, *, size=20, limit=100):
+        self.seen["list_jobs"] = {"limit": limit}
+        if self._error is not None:
+            raise self._error
+        return self._list_result if self._list_result is not None else {"list": [], "total": 0}
+
+    def stop_job(self, job_uuid):
+        self.seen["stop_job"] = {"job_uuid": job_uuid}
+        if self._error is not None:
+            raise self._error
+        return {"success": True}
+
 
 def _fake_api(monkeypatch, *, token=None, error=None, list_result=None) -> _FakeApi:
     fake = _FakeApi(token=token, error=error, list_result=list_result)
@@ -313,4 +331,59 @@ def test_robot_list_auth_error(monkeypatch):
     assert result.exit_code == 1
     data = _load_json(result)
     assert data["error"]["code"] == "auth_error"
+    assert result.stderr == ""
+
+
+# --- job get ---
+def test_job_get_success(monkeypatch):
+    fake = _fake_api(monkeypatch)
+    result = runner.invoke(app, ["job", "get", "--job-uuid", "j-123"])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"]["jobUuid"] == "j-123"
+    assert data["data"]["status"] == "finish"
+    assert fake.seen["get_job"] == {"job_uuid": "j-123"}
+    assert result.stderr == ""
+
+
+def test_job_get_missing_uuid(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, ["job", "get"])
+    assert result.exit_code == 2
+
+
+def test_job_get_auth_error(monkeypatch):
+    _fake_api(monkeypatch, error=AuthError("未登录，请先运行 login 命令"))
+    result = runner.invoke(app, ["job", "get", "--job-uuid", "j-123"])
+    assert result.exit_code == 1
+    data = _load_json(result)
+    assert data["error"]["code"] == "auth_error"
+    assert result.stderr == ""
+
+
+# --- job stop ---
+def test_job_stop_success(monkeypatch):
+    fake = _fake_api(monkeypatch)
+    result = runner.invoke(app, ["job", "stop", "--job-uuid", "j-123"])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"] == {"success": True}
+    assert fake.seen["stop_job"] == {"job_uuid": "j-123"}
+    assert result.stderr == ""
+
+
+def test_job_stop_missing_uuid(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, ["job", "stop"])
+    assert result.exit_code == 2
+
+
+def test_job_stop_api_error(monkeypatch):
+    _fake_api(monkeypatch, error=ApiError("任务已结束，无法停止"))
+    result = runner.invoke(app, ["job", "stop", "--job-uuid", "j-123"])
+    assert result.exit_code == 1
+    data = _load_json(result)
+    assert data["error"]["code"] == "api_error"
     assert result.stderr == ""

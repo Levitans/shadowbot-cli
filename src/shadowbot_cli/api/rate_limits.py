@@ -22,19 +22,22 @@ APP_VERSION_DETAIL_PATH = "/oapi/app/open/query/appVersionDetail"
 CLIENT_LIST_PATH = "/oapi/dispatch/v2/client/list"
 CLIENT_GROUP_LIST_PATH = "/oapi/dispatch/v2/client/group/list"
 JOB_START_PATH = "/oapi/dispatch/v2/job/start"
+JOB_QUERY_PATH = "/oapi/dispatch/v2/job/query"
+JOB_LIST_PATH = "/oapi/dispatch/v2/job/list"
+JOB_STOP_PATH = "/oapi/dispatch/v2/job/stop"
 FILE_UPLOAD_PATH = "/oapi/dispatch/v2/file/upload"
 
 # 文档登记的接口频率限制（次/秒）
 ENDPOINT_QPS: dict[str, float] = {
     # --- 调度 / 任务 ---
-    "/oapi/dispatch/v2/job/query": 30,
+    JOB_QUERY_PATH: 30,
     "/oapi/dispatch/v2/client/query": 20,
     "/oapi/dispatch/v2/task/list": 10,
     "/oapi/dispatch/v2/task/process/detail": 10,
     "/oapi/dispatch/v2/schedule/list": 10,
-    "/oapi/dispatch/v2/job/stop": 10,
+    JOB_STOP_PATH: 10,
     "/oapi/dispatch/v2/task/query": 10,
-    "/oapi/dispatch/v2/job/list": 10,
+    JOB_LIST_PATH: 10,
     JOB_START_PATH: 10,
     CLIENT_LIST_PATH: 10,
     "/oapi/dispatch/v2/task/start": 10,

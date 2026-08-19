@@ -223,6 +223,35 @@ def robot_groups() -> dict:
     return build_api_client().list_robot_groups()
 
 
+# --- 任务管理 ---
+job_group = typer.Typer(help="任务管理相关命令（一次 app run 产生一个 job）。", no_args_is_help=True)
+app.add_typer(job_group, name="job")
+
+
+@job_group.command("get")
+@json_command
+def job_get(
+    job_uuid: Annotated[
+        str,
+        typer.Option("--job-uuid", help="任务 UUID（app run 返回的 jobUuid）。"),
+    ],
+) -> dict:
+    """查询单个任务详情（状态、入参出参、执行时间等）。"""
+    return build_api_client().get_job(job_uuid)
+
+
+@job_group.command("stop")
+@json_command
+def job_stop(
+    job_uuid: Annotated[
+        str,
+        typer.Option("--job-uuid", help="要停止的任务 UUID。"),
+    ],
+) -> dict:
+    """停止指定任务。"""
+    return build_api_client().stop_job(job_uuid)
+
+
 @app.command()
 def skill(
     command: Annotated[
