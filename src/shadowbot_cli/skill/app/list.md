@@ -44,6 +44,6 @@
 | `ownerName` | 负责人显示名 |
 | `ownerAccount` | 负责人账号 |
 | `instruction` | 使用说明（HTML 文本） |
-| `flowParams` | 参数列表，每项含 name / direction / type / value / description / kind |
+| `flowParams` | 参数说明：对象含 `input`（入参）/ `output`（出参）两个数组，每项含 name / type / value / description（无 direction / kind） |
 
-    {"success": true, "data": {"list": [{"appId": "...", "appName": "...", "ownerName": "...", "ownerAccount": "...", "instruction": "...", "flowParams": [...]}], "total": 11}, "error": null}
+    {"success": true, "data": {"list": [{"appId": "...", "appName": "...", "ownerName": "...", "ownerAccount": "...", "instruction": "...", "flowParams": {"input": [{"name": "入参1", "type": "str", "value": "abc", "description": "..."}], "output": [{"name": "出参1", "type": "str", "value": "", "description": ""}]}}], "total": 11}, "error": null}

@@ -245,7 +245,7 @@ class ApiClient:
                 "ownerName": item.get("ownerName"),
                 "ownerAccount": item.get("ownerAccount"),
                 "instruction": (entry or {}).get("instruction", ""),
-                "flowParams": (entry or {}).get("flowParams", []),
+                "flowParams": _split_flow_params((entry or {}).get("flowParams", [])),
             })
         app_cache.save(cache)
         return {"list": result, "total": len(result)}
@@ -296,6 +296,25 @@ class ApiClient:
 
 
 # --- 响应解析 ---
+def _split_flow_params(params: list) -> dict[str, Any]:
+    """把原始 flowParams（含 direction/kind）切成 {input, output}，去掉 direction 与 kind。
+
+    每个 dict 项白名单裁剪为 name / type / value / description，且绝不原地修改
+    （项可能来自缓存 dict，是共享引用）。无 direction 的参数项按入参处理；
+    非 dict 项原样放入 input。
+    """
+    kept = ("name", "type", "value", "description")
+    input_: list[Any] = []
+    output: list[Any] = []
+    for item in params:
+        if not isinstance(item, dict):
+            input_.append(item)
+            continue
+        trimmed = {k: item[k] for k in kept if k in item}
+        (output if item.get("direction") == "Out" else input_).append(trimmed)
+    return {"input": input_, "output": output}
+
+
 def _lookup(payload: dict[str, Any], *names: str) -> Any:
     """在响应（含可能的 data 包装层）里大小写不敏感地找键。"""
     layers: list[dict[str, Any]] = [payload]

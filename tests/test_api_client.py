@@ -3,7 +3,7 @@
 import pytest
 
 from shadowbot_cli import app_cache, config
-from shadowbot_cli.api.client import ApiClient, _parse_token
+from shadowbot_cli.api.client import ApiClient, _parse_token, _split_flow_params
 from shadowbot_cli.api.models import Token
 from shadowbot_cli.api.rate_limits import rate_limit_for
 from shadowbot_cli.errors import ApiError, AuthError, HttpError
@@ -249,6 +249,32 @@ def _app_item(app_id, *, version="3", app_type="app", name="应用"):
             "ownerName": "果冻", "ownerAccount": "guodong@fckjjs"}
 
 
+def test_split_flow_params():
+    params = [
+        {"name": "入参1", "direction": "In", "type": "str", "value": "abc", "description": "描述", "kind": "Text"},
+        {"name": "出参1", "direction": "Out", "type": "int", "value": "0", "description": "", "kind": "Expression"},
+        {"name": "无方向", "type": "bool", "value": "False", "kind": "Text"},
+        "non-dict-item",
+    ]
+    result = _split_flow_params(params)
+    # 入参：direction=In 或缺失；出参：direction=Out；direction/kind 一律剔除
+    assert result == {
+        "input": [
+            {"name": "入参1", "type": "str", "value": "abc", "description": "描述"},
+            {"name": "无方向", "type": "bool", "value": "False"},  # 缺失键自然省略
+            "non-dict-item",
+        ],
+        "output": [{"name": "出参1", "type": "int", "value": "0", "description": ""}],
+    }
+    # 入参列表本身不被原地修改（缓存 dict 是共享引用）
+    assert params[0] == {"name": "入参1", "direction": "In", "type": "str", "value": "abc", "description": "描述", "kind": "Text"}
+    assert params[1]["direction"] == "Out"
+
+
+def test_split_flow_params_empty():
+    assert _split_flow_params([]) == {"input": [], "output": []}
+
+
 def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
     def instruction_handler(json, params):
         app_id = params.get("appId")
@@ -256,7 +282,9 @@ def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
 
     def flow_handler(json, params):
         app_id = params.get("appId")
-        return {"success": True, "code": 200, "data": {"flowParams": [{"name": "p"}] if app_id == "a1" else []}}
+        return {"success": True, "code": 200, "data": {
+            "flowParams": [{"name": "p", "direction": "In", "kind": "Text"}] if app_id == "a1" else []
+        }}
 
     client, http = _app_client(monkeypatch, tmp_path, {
         APP_LIST_PATH: _list_response([
@@ -276,7 +304,7 @@ def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
     assert item["ownerName"] == "果冻"
     assert item["ownerAccount"] == "guodong@fckjjs"
     assert item["instruction"] == "<p>ins</p>"
-    assert item["flowParams"] == [{"name": "p"}]
+    assert item["flowParams"] == {"input": [{"name": "p"}], "output": []}
     # a2/a3 在拉详情前已被过滤；a1/a4 各拉 2 个详情接口 = 4 次
     detail_calls = [c for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)]
     assert {c["path"] for c in detail_calls} == {APP_ONLINE_PATH, APP_VERSION_PATH}
