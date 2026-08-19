@@ -64,3 +64,12 @@ def test_invalid_rate_raises(tmp_path):
     limiter, _ = _limiter(tmp_path)
     with pytest.raises(ValueError):
         limiter.acquire(RateLimit(rate=0, capacity=1, name="bad"))
+
+
+def test_lock_file_separate_from_state(tmp_path):
+    """锁文件与状态文件分离：避免 Windows 上 os.replace 替换仍持锁的状态文件时 PermissionError。"""
+    limiter, _ = _limiter(tmp_path, rate=10, capacity=3)
+    limit = RateLimit(rate=10, capacity=3, name="a")
+    limiter.acquire(limit)
+    assert (tmp_path / "a.json").exists()
+    assert (tmp_path / "a.lock").exists()

@@ -38,10 +38,15 @@ class RateLimit:
 
 
 class _FileLock:
-    """基于 fcntl 的跨进程文件锁；无 fcntl 时退回进程内锁。"""
+    """基于 fcntl 的跨进程文件锁；无 fcntl 时退回进程内锁。
 
-    def __init__(self, path: Path):
-        self._path = path
+    锁文件与被保护的数据文件分离：避免 Windows 上 os.replace
+    替换仍持锁的数据文件时 PermissionError（Win32 不允许重命名
+    或替换有打开句柄的文件）。
+    """
+
+    def __init__(self, lock_path: Path):
+        self._path = lock_path
         self._fh: Any = None
         self._fallback = _in_process_lock if fcntl is None else None
 
@@ -78,9 +83,10 @@ class RateLimiter:
         if limit.rate <= 0 or limit.capacity <= 0:
             raise ValueError(f"非法的限流配置：{limit}")
         state_file = self._state_dir / f"{_safe_name(limit.name)}.json"
+        lock_file = state_file.with_suffix(".lock")
         deadline = self._time() + timeout if timeout is not None else None
         while True:
-            with _FileLock(state_file):
+            with _FileLock(lock_file):
                 state = self._read_state(state_file, limit)
                 now = self._time()
                 refilled = state["tokens"] + (now - state["last_refill"]) * limit.rate
