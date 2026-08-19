@@ -196,7 +196,7 @@ def skill(
         typer.Argument(help="命令路径，如 login 或 app run；不填显示用法。"),
     ] = None,
 ) -> None:
-    """查看命令的使用文档（直接输出原始 Markdown/帮助文本，不套 JSON 信封）。"""
+    """查看命令的使用文档。"""
     if not command:
         print("用法：shadowbot-cli skill <命令路径>")
         print("示例：shadowbot-cli skill login")
