@@ -33,6 +33,22 @@ class _FakeApi:
             raise self._error
         return self._list_result if self._list_result is not None else {"list": [], "total": 0}
 
+    def list_robots(self):
+        if self._error is not None:
+            raise self._error
+        return self._list_result if self._list_result is not None else {"list": [], "total": 0}
+
+    def list_robot_groups(self):
+        if self._error is not None:
+            raise self._error
+        return self._list_result if self._list_result is not None else {"list": [], "total": 0}
+
+    def start_job(self, *, app_id, account_name, params=None):
+        self.seen["run"] = {"app_id": app_id, "account_name": account_name, "params": params}
+        if self._error is not None:
+            raise self._error
+        return {"jobUuid": "job-1"}
+
 
 def _fake_api(monkeypatch, *, token=None, error=None, list_result=None) -> _FakeApi:
     fake = _FakeApi(token=token, error=error, list_result=list_result)
@@ -173,6 +189,127 @@ def test_app_list_conflicting_filters(monkeypatch):
 def test_app_list_auth_error(monkeypatch):
     _fake_api(monkeypatch, error=AuthError("未登录或令牌已过期，请先运行 login 命令"))
     result = runner.invoke(app, ["app", "list", "--app-name", "x"])
+    assert result.exit_code == 1
+    data = _load_json(result)
+    assert data["error"]["code"] == "auth_error"
+    assert result.stderr == ""
+
+
+# --- app run ---
+def test_app_run_success(monkeypatch):
+    fake = _fake_api(monkeypatch)
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "guodong@fckjjs",
+        "--params", '{"入参1": "abc"}',
+    ])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"] == {"jobUuid": "job-1"}
+    assert fake.seen["run"] == {
+        "app_id": "a1", "account_name": "guodong@fckjjs", "params": {"入参1": "abc"},
+    }
+    assert result.stderr == ""
+
+
+def test_app_run_without_params(monkeypatch):
+    fake = _fake_api(monkeypatch)
+    result = runner.invoke(app, ["app", "run", "--app-id", "a1", "--account-name", "robot"])
+    assert result.exit_code == 0
+    assert fake.seen["run"]["params"] is None
+
+
+def test_app_run_params_rejects_array(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "robot", "--params", '[{"name":"x"}]',
+    ])
+    assert result.exit_code == 2
+    assert _load_json(result)["error"]["code"] == "usage_error"
+
+
+def test_app_run_params_from_stdin(monkeypatch):
+    fake = _fake_api(monkeypatch)
+    result = runner.invoke(
+        app,
+        ["app", "run", "--app-id", "a1", "--account-name", "robot", "--params", "-"],
+        input='{"入参1": "abc"}',
+    )
+    assert result.exit_code == 0
+    assert fake.seen["run"]["params"] == {"入参1": "abc"}
+
+
+def test_app_run_params_invalid_json(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "robot", "--params", "{bad",
+    ])
+    assert result.exit_code == 2
+    data = _load_json(result)
+    assert data["error"]["code"] == "usage_error"
+    assert result.stderr == ""
+
+
+def test_app_run_params_must_be_object(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "robot", "--params", '"str"',
+    ])
+    assert result.exit_code == 2
+    assert _load_json(result)["error"]["code"] == "usage_error"
+
+
+def test_app_run_params_must_be_object_string_value(monkeypatch):
+    _fake_api(monkeypatch)
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "robot", "--params", '"str"',
+    ])
+    assert result.exit_code == 2
+    assert _load_json(result)["error"]["code"] == "usage_error"
+
+
+def test_app_run_api_error(monkeypatch):
+    _fake_api(monkeypatch, error=ApiError("应用没有入参「x」（可选：入参1）"))
+    result = runner.invoke(app, [
+        "app", "run", "--app-id", "a1", "--account-name", "robot", "--params", '{"x": 1}',
+    ])
+    assert result.exit_code == 1
+    data = _load_json(result)
+    assert data["error"]["code"] == "api_error"
+    assert result.stderr == ""
+
+
+# --- robot list / robot groups ---
+def test_robot_list_success(monkeypatch):
+    _fake_api(monkeypatch, list_result={
+        "list": [{"robotClientUuid": "r1", "robotClientName": "桉夏@fckjjs", "status": "offline"}],
+        "total": 1,
+    })
+    result = runner.invoke(app, ["robot", "list"])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"]["total"] == 1
+    assert data["data"]["list"][0]["robotClientName"] == "桉夏@fckjjs"
+    assert result.stderr == ""
+
+
+def test_robot_groups_success(monkeypatch):
+    _fake_api(monkeypatch, list_result={
+        "list": [{"robotClientGroupUuid": "g1", "robotClientGroupName": "桉夏"}],
+        "total": 1,
+    })
+    result = runner.invoke(app, ["robot", "groups"])
+    assert result.exit_code == 0
+    data = _load_json(result)
+    assert data["success"] is True
+    assert data["data"]["list"][0]["robotClientGroupName"] == "桉夏"
+    assert result.stderr == ""
+
+
+def test_robot_list_auth_error(monkeypatch):
+    _fake_api(monkeypatch, error=AuthError("未登录，请先运行 login 命令"))
+    result = runner.invoke(app, ["robot", "list"])
     assert result.exit_code == 1
     data = _load_json(result)
     assert data["error"]["code"] == "auth_error"

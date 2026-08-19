@@ -9,7 +9,9 @@
 from __future__ import annotations
 
 import functools
-from typing import Annotated, NoReturn, Optional
+import json
+import sys
+from typing import Annotated, Any, NoReturn, Optional
 
 import typer
 from dotenv import find_dotenv, load_dotenv
@@ -170,6 +172,57 @@ def app_list(
     )
 
 
+@app_group.command("run")
+@json_command
+def app_run(
+    app_id: Annotated[
+        str,
+        typer.Option("--app-id", help="应用 ID（app list 返回的 appId）。"),
+    ],
+    account_name: Annotated[
+        str,
+        typer.Option("--account-name", help="机器人账号（robot list 返回的 robotClientName）。"),
+    ],
+    params: Annotated[
+        Optional[str],
+        typer.Option(
+            "--params",
+            help='运行参数 JSON 对象 {"参数名": 值}；参数类型自动补齐，file 参数给本地文件路径自动上传；"-" 从 stdin 读取。',
+        ),
+    ] = None,
+) -> dict:
+    """启动应用运行。"""
+    parsed: dict | None = None
+    if params is not None:
+        raw = sys.stdin.read() if params == "-" else params
+        try:
+            parsed = json.loads(raw)
+        except json.JSONDecodeError as e:
+            _fail_and_exit("usage_error", f"--params 不是有效 JSON：{e}", exit_code=2)
+        if not isinstance(parsed, dict):
+            _fail_and_exit("usage_error", "--params 必须是 JSON 对象 {参数名: 值}", exit_code=2)
+    return build_api_client().start_job(app_id=app_id, account_name=account_name, params=parsed)
+
+
+# --- 机器人管理 ---
+robot_group = typer.Typer(help="机器人管理相关命令（一个机器人即一台电脑）。", no_args_is_help=True)
+app.add_typer(robot_group, name="robot")
+
+
+@robot_group.command("list")
+@json_command
+def robot_list() -> dict:
+    """查询机器人列表。"""
+    return build_api_client().list_robots()
+
+
+@robot_group.command("groups")
+@json_command
+def robot_groups() -> dict:
+    """查询机器人组列表。"""
+    return build_api_client().list_robot_groups()
+
+
 @app.command()
 def skill(
     command: Annotated[
@@ -177,7 +230,7 @@ def skill(
         typer.Argument(help="命令路径，如 login 或 app run；不填显示用法。"),
     ] = None,
 ) -> None:
-    """查看命令的使用文档（直接输出原始 Markdown/帮助文本，不套 JSON 信封）。"""
+    """查看命令的使用文档。"""
     if not command:
         print("用法：shadowbot-cli skill <命令路径>")
         print("示例：shadowbot-cli skill login")

@@ -63,3 +63,18 @@ def test_non_json_raises(tmp_path):
     client = _client(lambda r: httpx.Response(200, text="<html>"), tmp_path)
     with pytest.raises(HttpError, match="JSON"):
         client.get("/a")
+
+
+def test_post_files_multipart(tmp_path):
+    calls = {}
+
+    def handler(request):
+        calls["content_type"] = request.headers["content-type"]
+        calls["body"] = request.content
+        return httpx.Response(200, json={"ok": True})
+
+    client = _client(handler, tmp_path)
+    result = client.post("/upload", files={"file": ("a.txt", b"hello")})
+    assert result == {"ok": True}
+    assert calls["content_type"].startswith("multipart/form-data")
+    assert b"hello" in calls["body"]

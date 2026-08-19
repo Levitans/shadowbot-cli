@@ -49,6 +49,7 @@ class HttpClient:
         *,
         params: dict[str, Any] | None = None,
         json: Any = None,
+        files: dict[str, Any] | None = None,
         headers: dict[str, str] | None = None,
         rate_limit: RateLimit | None = None,
     ) -> Any:
@@ -56,6 +57,7 @@ class HttpClient:
 
         限流：rate_limit 不为 None 时，先向限流器申请令牌（可能阻塞）。
         重试：网络错误、429、5xx 按指数退避重试（默认 3 次）。
+        files 不为 None 时按 multipart 表单上传（与 json 互斥，由调用方保证）。
         """
         if rate_limit is not None:
             self._limiter.acquire(rate_limit)
@@ -63,7 +65,9 @@ class HttpClient:
         last_error: BaseException | None = None
         for attempt in range(self._retries):
             try:
-                resp = self._client.request(method, path, params=params, json=json, headers=headers)
+                resp = self._client.request(
+                    method, path, params=params, json=json, files=files, headers=headers
+                )
             except httpx.HTTPError as e:
                 last_error = e
             else:

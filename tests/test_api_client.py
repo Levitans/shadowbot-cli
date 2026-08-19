@@ -1,9 +1,11 @@
 """api 层：令牌响应解析、login 持久化、get_token 鉴权。"""
 
+import time
+
 import pytest
 
 from shadowbot_cli import app_cache, config
-from shadowbot_cli.api.client import ApiClient, _parse_token
+from shadowbot_cli.api.client import ApiClient, _coerce_param_value, _parse_token, _split_flow_params
 from shadowbot_cli.api.models import Token
 from shadowbot_cli.api.rate_limits import rate_limit_for
 from shadowbot_cli.errors import ApiError, AuthError, HttpError
@@ -170,6 +172,7 @@ class _FakeAppHttp:
         self.calls.append({
             "method": method, "path": path, "params": params,
             "json": json, "headers": headers, "rate_limit": rate_limit,
+            "files": kwargs.get("files"),
         })
         resp = self.responses.get(path)
         if callable(resp):
@@ -249,6 +252,32 @@ def _app_item(app_id, *, version="3", app_type="app", name="应用"):
             "ownerName": "果冻", "ownerAccount": "guodong@fckjjs"}
 
 
+def test_split_flow_params():
+    params = [
+        {"name": "入参1", "direction": "In", "type": "str", "value": "abc", "description": "描述", "kind": "Text"},
+        {"name": "出参1", "direction": "Out", "type": "int", "value": "0", "description": "", "kind": "Expression"},
+        {"name": "无方向", "type": "bool", "value": "False", "kind": "Text"},
+        "non-dict-item",
+    ]
+    result = _split_flow_params(params)
+    # 入参：direction=In 或缺失；出参：direction=Out；direction/kind 一律剔除
+    assert result == {
+        "input": [
+            {"name": "入参1", "type": "str", "value": "abc", "description": "描述"},
+            {"name": "无方向", "type": "bool", "value": "False"},  # 缺失键自然省略
+            "non-dict-item",
+        ],
+        "output": [{"name": "出参1", "type": "int", "value": "0", "description": ""}],
+    }
+    # 入参列表本身不被原地修改（缓存 dict 是共享引用）
+    assert params[0] == {"name": "入参1", "direction": "In", "type": "str", "value": "abc", "description": "描述", "kind": "Text"}
+    assert params[1]["direction"] == "Out"
+
+
+def test_split_flow_params_empty():
+    assert _split_flow_params([]) == {"input": [], "output": []}
+
+
 def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
     def instruction_handler(json, params):
         app_id = params.get("appId")
@@ -256,7 +285,9 @@ def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
 
     def flow_handler(json, params):
         app_id = params.get("appId")
-        return {"success": True, "code": 200, "data": {"flowParams": [{"name": "p"}] if app_id == "a1" else []}}
+        return {"success": True, "code": 200, "data": {
+            "flowParams": [{"name": "p", "direction": "In", "kind": "Text"}] if app_id == "a1" else []
+        }}
 
     client, http = _app_client(monkeypatch, tmp_path, {
         APP_LIST_PATH: _list_response([
@@ -276,7 +307,7 @@ def test_list_apps_filters_and_enriches(monkeypatch, tmp_path):
     assert item["ownerName"] == "果冻"
     assert item["ownerAccount"] == "guodong@fckjjs"
     assert item["instruction"] == "<p>ins</p>"
-    assert item["flowParams"] == [{"name": "p"}]
+    assert item["flowParams"] == {"input": [{"name": "p"}], "output": []}
     # a2/a3 在拉详情前已被过滤；a1/a4 各拉 2 个详情接口 = 4 次
     detail_calls = [c for c in http.calls if c["path"] in (APP_ONLINE_PATH, APP_VERSION_PATH)]
     assert {c["path"] for c in detail_calls} == {APP_ONLINE_PATH, APP_VERSION_PATH}
@@ -366,3 +397,230 @@ def test_fetch_all_pages_loops(monkeypatch, tmp_path):
     list_calls = [c for c in http.calls if c["path"] == APP_LIST_PATH]
     assert len(list_calls) == 2
 
+
+# --- 机器人管理 ---
+CLIENT_LIST_PATH = "/oapi/dispatch/v2/client/list"
+CLIENT_GROUP_LIST_PATH = "/oapi/dispatch/v2/client/group/list"
+
+
+def _group_item(uuid, name):
+    return {"robotClientGroupUuid": uuid, "robotClientGroupName": name}
+
+
+def _robot_item(uuid, name, status="offline"):
+    # 模拟接口真实返回：除三个保留字段外还带 IP、机器名等冗余字段
+    return {
+        "robotClientUuid": uuid,
+        "robotClientName": name,
+        "status": status,
+        "clientIp": "192.168.1.1",
+        "machineName": "LAPTOP-X",
+        "clientVersion": "6.0.30",
+        "robotClientGroupUuids": [],
+    }
+
+
+def test_list_robot_groups(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        CLIENT_GROUP_LIST_PATH: _list_response([_group_item("g1", "桉夏"), _group_item("g2", "测试")]),
+    })
+    result = client.list_robot_groups()
+    assert result["total"] == 2
+    assert result["list"][0] == {"robotClientGroupUuid": "g1", "robotClientGroupName": "桉夏"}
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == CLIENT_GROUP_LIST_PATH
+    assert call["json"] == {"page": 1, "size": 100}
+    assert call["headers"] == {"Authorization": "Bearer tok"}
+    assert call["rate_limit"] is not None
+
+
+def test_list_robot_groups_paginates(monkeypatch, tmp_path):
+    def handler(body, params):
+        return _list_response([_group_item(f"g{body['page']}", "组")], pages=2)
+
+    client, http = _app_client(monkeypatch, tmp_path, {CLIENT_GROUP_LIST_PATH: handler})
+    result = client.list_robot_groups()
+    assert [g["robotClientGroupUuid"] for g in result["list"]] == ["g1", "g2"]
+    assert sum(1 for c in http.calls if c["path"] == CLIENT_GROUP_LIST_PATH) == 2
+
+
+def test_list_robots_trims_fields(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        CLIENT_LIST_PATH: _list_response([_robot_item("r1", "桉夏@fckjjs", "online")]),
+    })
+    result = client.list_robots()
+    assert result["total"] == 1
+    # 只保留三个字段，IP/机器名/版本等一律裁掉
+    assert result["list"][0] == {
+        "robotClientUuid": "r1",
+        "robotClientName": "桉夏@fckjjs",
+        "status": "online",
+    }
+
+
+def test_list_robots_paginates(monkeypatch, tmp_path):
+    def handler(body, params):
+        return _list_response([_robot_item(f"r{body['page']}", "机器人")], pages=2)
+
+    client, http = _app_client(monkeypatch, tmp_path, {CLIENT_LIST_PATH: handler})
+    result = client.list_robots()
+    assert result["total"] == 2
+    assert [r["robotClientUuid"] for r in result["list"]] == ["r1", "r2"]
+    assert sum(1 for c in http.calls if c["path"] == CLIENT_LIST_PATH) == 2
+
+
+def test_list_robots_empty_data(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        CLIENT_LIST_PATH: {"success": True, "code": 200, "data": None, "page": {}},
+    })
+    assert client.list_robots() == {"list": [], "total": 0}
+
+
+
+# --- 应用运行 ---
+JOB_START_PATH = "/oapi/dispatch/v2/job/start"
+FILE_UPLOAD_PATH = "/oapi/dispatch/v2/file/upload"
+
+FLOW_PARAMS = [
+    {"name": "入参1", "type": "str", "direction": "In"},
+    {"name": "入参2", "type": "int", "direction": "In"},
+    {"name": "入参3", "type": "bool", "direction": "In"},
+    {"name": "入参5", "type": "file", "direction": "In"},
+    {"name": "出参1", "type": "str", "direction": "Out"},
+]
+
+
+def _cache_app(app_id="a1"):
+    app_cache.save({
+        app_id: {"version": "1.0", "cached_at": time.time(), "flowParams": FLOW_PARAMS},
+    })
+
+
+def test_upload_file_success(monkeypatch, tmp_path):
+    f = tmp_path / "数据.xlsx"
+    f.write_bytes(b"xlsx-bytes")
+    client, http = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {"fileKey": "fk-1"}},
+    })
+    assert client.upload_file(str(f)) == "fk-1"
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == FILE_UPLOAD_PATH
+    assert call["files"] == {"file": ("数据.xlsx", b"xlsx-bytes")}
+    assert call["headers"] == {"Authorization": "Bearer tok"}
+
+
+def test_upload_file_missing(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    with pytest.raises(ApiError, match="文件不存在"):
+        client.upload_file(str(tmp_path / "nope.xlsx"))
+
+
+def test_upload_file_no_filekey(monkeypatch, tmp_path):
+    f = tmp_path / "a.txt"
+    f.write_bytes(b"x")
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {}},
+    })
+    with pytest.raises(ApiError, match="fileKey"):
+        client.upload_file(str(f))
+
+
+def test_start_job_uses_cached_flow_params(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    _cache_app()
+    result = client.start_job(
+        app_id="a1", account_name="guodong@fckjjs",
+        params={"入参1": "abc", "入参2": 9191, "入参3": True},
+    )
+    assert result == {"jobUuid": "j1"}
+    call = http.calls[0]
+    assert call["path"] == JOB_START_PATH
+    assert call["json"] == {
+        "accountName": "guodong@fckjjs",
+        "robotUuid": "a1",
+        "params": [
+            {"name": "入参1", "type": "str", "value": "abc"},
+            {"name": "入参2", "type": "int", "value": "9191"},  # int → 字符串
+            {"name": "入参3", "type": "bool", "value": True},   # bool 保留布尔
+        ],
+    }
+    # 缓存命中：不实时拉 flowParams
+    assert all(c["path"] != APP_ONLINE_PATH for c in http.calls)
+
+
+def test_start_job_cache_miss_fetches_live(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        APP_ONLINE_PATH: {"success": True, "code": 200, "data": {"flowParams": FLOW_PARAMS}},
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    client.start_job(app_id="a1", account_name="robot", params={"入参1": "abc"})
+    assert [c["path"] for c in http.calls] == [APP_ONLINE_PATH, JOB_START_PATH]
+    assert http.calls[1]["json"]["params"] == [{"name": "入参1", "type": "str", "value": "abc"}]
+
+
+def test_start_job_without_params(monkeypatch, tmp_path):
+    # 不传参数：空 dict → 空数组，不查 flowParams 接口
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    client.start_job(app_id="a1", account_name="robot")
+    assert http.calls[0]["json"]["params"] == []
+    assert all(c["path"] != APP_ONLINE_PATH for c in http.calls)
+
+
+def test_start_job_unknown_param(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="没有入参「不存在」"):
+        client.start_job(app_id="a1", account_name="robot", params={"不存在": 1})
+
+
+def test_start_job_rejects_output_param(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="出参1"):
+        client.start_job(app_id="a1", account_name="robot", params={"出参1": "x"})
+
+
+def test_start_job_file_param_uploads_local_path(monkeypatch, tmp_path):
+    f = tmp_path / "数据.xlsx"
+    f.write_bytes(b"xlsx")
+    client, http = _app_client(monkeypatch, tmp_path, {
+        FILE_UPLOAD_PATH: {"success": True, "code": 200, "data": {"fileKey": "fk-9"}},
+        JOB_START_PATH: {"success": True, "code": 200, "data": {"jobUuid": "j1"}},
+    })
+    _cache_app()
+    client.start_job(app_id="a1", account_name="robot", params={"入参5": str(f)})
+    assert [c["path"] for c in http.calls] == [FILE_UPLOAD_PATH, JOB_START_PATH]
+    assert http.calls[1]["json"]["params"] == [{"name": "入参5", "type": "file", "value": "fk-9"}]
+
+
+def test_start_job_file_param_missing_path_raises(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {})
+    _cache_app()
+    with pytest.raises(ApiError, match="file 类型，请传入本地文件路径"):
+        client.start_job(app_id="a1", account_name="robot", params={"入参5": "/no/such/file.xlsx"})
+
+
+# --- 参数值序列化 ---
+def test_coerce_param_value_bool():
+    assert _coerce_param_value("bool", True) is True
+    assert _coerce_param_value("bool", "true") is True
+    assert _coerce_param_value("bool", "false") is False
+    assert _coerce_param_value("bool", 0) is False
+
+
+def test_coerce_param_value_scalars_to_str():
+    assert _coerce_param_value("int", 9191) == "9191"
+    assert _coerce_param_value("float", 1.01) == "1.01"
+    assert _coerce_param_value("str", "abc") == "abc"
+    assert _coerce_param_value("str", None) == ""
+
+
+def test_coerce_param_value_structured_to_json():
+    assert _coerce_param_value("str", {"a": 1}) == '{"a": 1}'
+    assert _coerce_param_value("str", [1, 2]) == "[1, 2]"
