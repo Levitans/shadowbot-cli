@@ -606,6 +606,211 @@ def test_start_job_file_param_missing_path_raises(monkeypatch, tmp_path):
         client.start_job(app_id="a1", account_name="robot", params={"入参5": "/no/such/file.xlsx"})
 
 
+# --- 任务管理 ---
+JOB_QUERY_PATH = "/oapi/dispatch/v2/job/query"
+JOB_LIST_PATH = "/oapi/dispatch/v2/job/list"
+JOB_STOP_PATH = "/oapi/dispatch/v2/job/stop"
+
+
+def _job_detail(job_uuid="j1", status="finish"):
+    """模拟 job/query 接口完整响应（含冗余字段）。"""
+    return {
+        "success": True, "code": 200,
+        "data": {
+            "jobUuid": job_uuid,
+            "status": status,
+            "statusName": "完成" if status == "finish" else "运行中",
+            "robotUuid": "app-1",
+            "robotName": "测试应用",
+            "robotClientUuid": "rc-1",
+            "robotClientName": "robot@test.com",
+            "createTime": "2024-01-01 10:00:00",
+            "startTime": "2024-01-01 10:00:05",
+            "endTime": "2024-01-01 10:01:00",
+            "remark": "测试任务",
+            "screenshotUrl": "https://example.com/shot.png",
+            "robotParams": {
+                "inputs": [
+                    {"name": "入参1", "value": "abc", "type": "str", "extraField": "冗余"},
+                ],
+                "outputs": [
+                    {"name": "出参1", "value": "result", "type": "str", "extraField": "冗余"},
+                ],
+            },
+            "redundantField": "应被裁剪",
+        },
+    }
+
+
+def _job_list_item(i, status="finish"):
+    """模拟 job list 单项（含冗余字段）。"""
+    return {
+        "id": f"id-{i}",
+        "jobUuid": f"j{i}",
+        "status": status,
+        "robotUuid": f"app-{i}",
+        "robotName": f"应用{i}",
+        "robotClientUuid": f"rc-{i}",
+        "robotClientName": f"robot{i}@test.com",
+        "triggerTime": f"2024-01-0{i} 10:00:00",
+        "startTime": f"2024-01-0{i} 10:00:05",
+        "endTime": f"2024-01-0{i} 10:01:00",
+        "updateTime": f"2024-01-0{i} 10:01:00",
+        "remark": f"任务{i}",
+        "taskName": f"任务名{i}",
+        "redundantField": "应被裁剪",
+    }
+
+
+def _job_list_response(items, *, has_data=True, next_id=None):
+    return {
+        "success": True, "code": 200,
+        "data": {
+            "hasData": has_data,
+            "nextId": next_id,
+            "preId": None,
+            "cursorDirection": "next",
+            "dataList": items,
+        },
+    }
+
+
+def test_get_job_trims_fields(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_QUERY_PATH: _job_detail("j-abc"),
+    })
+    result = client.get_job("j-abc")
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == JOB_QUERY_PATH
+    assert call["json"] == {"jobUuid": "j-abc"}
+    assert call["rate_limit"] is not None
+    assert result["jobUuid"] == "j-abc"
+    assert result["status"] == "finish"
+    assert result["statusName"] == "完成"
+    assert result["robotName"] == "测试应用"
+    assert result["robotClientName"] == "robot@test.com"
+    assert result["createTime"] == "2024-01-01 10:00:00"
+    assert result["screenshotUrl"] == "https://example.com/shot.png"
+    assert result["inputs"] == [{"name": "入参1", "value": "abc", "type": "str"}]
+    assert result["outputs"] == [{"name": "出参1", "value": "result", "type": "str"}]
+    assert "redundantField" not in result
+    assert "extraField" not in result["inputs"][0]
+    assert "robotParams" not in result
+
+
+def test_get_job_missing_data(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        JOB_QUERY_PATH: {"success": True, "code": 200, "data": None},
+    })
+    assert client.get_job("j1") == {}
+
+
+def test_get_job_api_error(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        JOB_QUERY_PATH: {"success": False, "code": 500, "message": "任务不存在"},
+    })
+    with pytest.raises(ApiError, match="任务不存在"):
+        client.get_job("j1")
+
+
+def test_list_jobs_trims_fields(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        JOB_LIST_PATH: _job_list_response([_job_list_item(1), _job_list_item(2)]),
+    })
+    result = client.list_jobs()
+    assert result["total"] == 2
+    item = result["list"][0]
+    assert item["jobUuid"] == "j1"
+    assert item["status"] == "finish"
+    assert item["robotName"] == "应用1"
+    assert item["robotClientName"] == "robot1@test.com"
+    assert item["triggerTime"] == "2024-01-01 10:00:00"
+    assert item["taskName"] == "任务名1"
+    assert "redundantField" not in item
+
+
+def test_list_jobs_single_page(monkeypatch, tmp_path):
+    """只有一页时（hasData=False 或 nextId 为空）只调一次接口。"""
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_LIST_PATH: _job_list_response(
+            [_job_list_item(1), _job_list_item(2)], has_data=False, next_id=None
+        ),
+    })
+    result = client.list_jobs()
+    assert result["total"] == 2
+    assert sum(1 for c in http.calls if c["path"] == JOB_LIST_PATH) == 1
+
+
+def test_list_jobs_cursor_pagination(monkeypatch, tmp_path):
+    """多页游标分页：nextId 作为下一次的 cursor 参数。"""
+    pages = {
+        "first": _job_list_response([_job_list_item(1)], has_data=True, next_id="cur-2"),
+        "second": _job_list_response([_job_list_item(2)], has_data=True, next_id="cur-3"),
+        "third": _job_list_response([_job_list_item(3)], has_data=False, next_id=None),
+    }
+    order = iter(["first", "second", "third"])
+
+    def handler(body, params):
+        key = next(order)
+        return pages[key]
+
+    client, http = _app_client(monkeypatch, tmp_path, {JOB_LIST_PATH: handler})
+    result = client.list_jobs(size=1)
+    assert result["total"] == 3
+    assert [j["jobUuid"] for j in result["list"]] == ["j1", "j2", "j3"]
+    calls = [c for c in http.calls if c["path"] == JOB_LIST_PATH]
+    assert len(calls) == 3
+    assert "cursor" not in calls[0]["json"]
+    assert calls[0]["json"]["cursorDirection"] == "next"
+    assert calls[1]["json"]["cursor"] == "cur-2"
+    assert calls[2]["json"]["cursor"] == "cur-3"
+
+
+def test_list_jobs_limit_caps_results(monkeypatch, tmp_path):
+    """设置 limit 时最多返回 limit 条，且翻页不会超过。"""
+    def handler(body, params):
+        cursor = body.get("cursor", "0")
+        start = int(cursor) + 1
+        items = [_job_list_item(start + i) for i in range(5)]
+        next_id = str(start + 4) if start + 4 < 20 else None
+        return _job_list_response(items, has_data=next_id is not None, next_id=next_id)
+
+    client, http = _app_client(monkeypatch, tmp_path, {JOB_LIST_PATH: handler})
+    result = client.list_jobs(size=5, limit=12)
+    assert result["total"] == 12
+    calls = [c for c in http.calls if c["path"] == JOB_LIST_PATH]
+    assert len(calls) == 3
+
+
+def test_list_jobs_empty(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        JOB_LIST_PATH: _job_list_response([], has_data=False),
+    })
+    assert client.list_jobs() == {"list": [], "total": 0}
+
+
+def test_stop_job_passes_uuid(monkeypatch, tmp_path):
+    client, http = _app_client(monkeypatch, tmp_path, {
+        JOB_STOP_PATH: {"success": True, "code": 200, "data": {"success": True}},
+    })
+    result = client.stop_job("j-123")
+    call = http.calls[0]
+    assert call["method"] == "POST"
+    assert call["path"] == JOB_STOP_PATH
+    assert call["json"] == {"jobUuid": "j-123"}
+    assert call["rate_limit"] is not None
+    assert result == {"success": True}
+
+
+def test_stop_job_api_error(monkeypatch, tmp_path):
+    client, _ = _app_client(monkeypatch, tmp_path, {
+        JOB_STOP_PATH: {"success": False, "code": 500, "message": "任务已结束"},
+    })
+    with pytest.raises(ApiError, match="任务已结束"):
+        client.stop_job("j-123")
+
+
 # --- 参数值序列化 ---
 def test_coerce_param_value_bool():
     assert _coerce_param_value("bool", True) is True

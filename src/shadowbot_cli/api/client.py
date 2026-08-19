@@ -28,7 +28,10 @@ from .rate_limits import (
     CLIENT_GROUP_LIST_PATH,
     CLIENT_LIST_PATH,
     FILE_UPLOAD_PATH,
+    JOB_LIST_PATH,
+    JOB_QUERY_PATH,
     JOB_START_PATH,
+    JOB_STOP_PATH,
     TOKEN_PATH,
     rate_limit_for,
 )
@@ -372,6 +375,105 @@ class ApiClient:
             if isinstance(item, dict) and item.get("direction") != "Out" and item.get("name"):
                 types[str(item["name"])] = str(item.get("type") or "str")
         return types
+
+    # --- 任务管理 ---
+    def get_job(self, job_uuid: str) -> dict[str, Any]:
+        """查询单个任务详情（POST JOB_QUERY_PATH）。
+
+        返回裁剪后的字段：保留核心信息（状态、时间、机器人、入参出参、截图），
+        robotParams.inputs / outputs 打平为顶层 inputs / outputs 数组，每项 {name, value, type}。
+        """
+        payload = self._call("POST", JOB_QUERY_PATH, json={"jobUuid": job_uuid})
+        data = payload.get("data")
+        if not isinstance(data, dict):
+            return {}
+        inputs_raw = (data.get("robotParams") or {}).get("inputs") or []
+        outputs_raw = (data.get("robotParams") or {}).get("outputs") or []
+        return {
+            "jobUuid": data.get("jobUuid"),
+            "status": data.get("status"),
+            "statusName": data.get("statusName"),
+            "robotUuid": data.get("robotUuid"),
+            "robotName": data.get("robotName"),
+            "robotClientUuid": data.get("robotClientUuid"),
+            "robotClientName": data.get("robotClientName"),
+            "createTime": data.get("createTime"),
+            "startTime": data.get("startTime"),
+            "endTime": data.get("endTime"),
+            "remark": data.get("remark"),
+            "screenshotUrl": data.get("screenshotUrl"),
+            "inputs": [
+                {"name": p.get("name"), "value": p.get("value"), "type": p.get("type")}
+                for p in inputs_raw if isinstance(p, dict)
+            ],
+            "outputs": [
+                {"name": p.get("name"), "value": p.get("value"), "type": p.get("type")}
+                for p in outputs_raw if isinstance(p, dict)
+            ],
+        }
+
+    def list_jobs(self, *, size: int = 20, limit: int = 100) -> dict[str, Any]:
+        """查询任务列表（POST JOB_LIST_PATH），返回 {"list": [...], "total": N}。
+
+        游标分页：每次响应的 nextId 作为下一次请求的 cursor。
+        size 控制每页大小（默认 20）。
+        limit 为 0 表示不限量，自动翻页拉取全部；默认 100 防止数据量过大。
+        """
+        items: list[dict[str, Any]] = []
+        cursor: str | None = None
+        while True:
+            body: dict[str, Any] = {"size": size, "cursorDirection": "next"}
+            if cursor:
+                body["cursor"] = cursor
+            payload = self._call("POST", JOB_LIST_PATH, json=body)
+            data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+            data_list = data.get("dataList") if isinstance(data.get("dataList"), list) else []
+            has_data = data.get("hasData", False)
+
+            trimmed = [
+                {
+                    "id": item.get("id"),
+                    "jobUuid": item.get("jobUuid"),
+                    "status": item.get("status"),
+                    "robotUuid": item.get("robotUuid"),
+                    "robotName": item.get("robotName"),
+                    "robotClientUuid": item.get("robotClientUuid"),
+                    "robotClientName": item.get("robotClientName"),
+                    "triggerTime": item.get("triggerTime"),
+                    "startTime": item.get("startTime"),
+                    "endTime": item.get("endTime"),
+                    "updateTime": item.get("updateTime"),
+                    "remark": item.get("remark"),
+                    "taskName": item.get("taskName"),
+                }
+                for item in data_list if isinstance(item, dict)
+            ]
+
+            if limit > 0:
+                remaining = limit - len(items)
+                if remaining <= 0:
+                    break
+                trimmed = trimmed[:remaining]
+
+            items.extend(trimmed)
+
+            if not has_data or not data_list:
+                break
+            if limit > 0 and len(items) >= limit:
+                break
+
+            next_id = data.get("nextId")
+            if not next_id or str(next_id) == cursor:
+                break
+            cursor = str(next_id)
+
+        return {"list": items, "total": len(items)}
+
+    def stop_job(self, job_uuid: str) -> dict[str, Any]:
+        """停止任务（POST JOB_STOP_PATH），返回接口 data 原样。"""
+        payload = self._call("POST", JOB_STOP_PATH, json={"jobUuid": job_uuid})
+        data = payload.get("data")
+        return data if isinstance(data, dict) else {"data": data}
 
 
 # --- 响应解析 ---
